@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<!-- URDF wrapper for MuJoCo simulation.
+     Includes base URDF + MuJoCo-specific ros2_control config. -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="so_arm101">
+
+    <!-- Import base URDF -->
+    <xacro:include filename="$(find so_arm101_description)/urdf/so_arm101.urdf" />
+
+    <!-- Import MuJoCo-specific ros2_control (mock hardware, no Gazebo plugins) -->
+    <xacro:include filename="$(find so_arm101_description)/urdf/so_arm101.mujoco.xacro" />
+
+</robot>

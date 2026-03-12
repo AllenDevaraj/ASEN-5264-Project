@@ -1,0 +1,151 @@
+<?xml version="1.0"?>
+<!-- Reference: ~/ros2_ws/src/jetank_description/urdf/jetank_sensors.xacro -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="so_arm101">
+
+  <!-- Fix the base to the world so the robot doesn't fall -->
+  <link name="world"/>
+  <joint name="world_to_base" type="fixed">
+    <parent link="world"/>
+    <child link="base"/>
+  </joint>
+
+  <!-- ros2_control hardware interface for Ignition Gazebo -->
+  <ros2_control name="GazeboSimSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+
+    <joint name="shoulder_pan">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="shoulder_lift">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="elbow_flex">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="wrist_flex">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="wrist_roll">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="gripper_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+  <!-- Gazebo ros2_control plugin — loads controller_manager with our controller config -->
+  <gazebo>
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(find so_arm101_moveit_config)/config/ros2_controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+
+  <!-- Gazebo materials for each link -->
+  <gazebo reference="base">
+    <material>
+      <ambient>1.0 0.82 0.12 1</ambient>
+      <diffuse>1.0 0.82 0.12 1</diffuse>
+    </material>
+  </gazebo>
+
+  <gazebo reference="shoulder">
+    <material>
+      <ambient>0.1 0.1 0.1 1</ambient>
+      <diffuse>0.1 0.1 0.1 1</diffuse>
+    </material>
+  </gazebo>
+
+  <gazebo reference="upper_arm">
+    <material>
+      <ambient>1.0 0.82 0.12 1</ambient>
+      <diffuse>1.0 0.82 0.12 1</diffuse>
+    </material>
+  </gazebo>
+
+  <gazebo reference="lower_arm">
+    <material>
+      <ambient>1.0 0.82 0.12 1</ambient>
+      <diffuse>1.0 0.82 0.12 1</diffuse>
+    </material>
+  </gazebo>
+
+  <gazebo reference="wrist">
+    <material>
+      <ambient>0.1 0.1 0.1 1</ambient>
+      <diffuse>0.1 0.1 0.1 1</diffuse>
+    </material>
+  </gazebo>
+
+  <gazebo reference="gripper">
+    <material>
+      <ambient>1.0 0.82 0.12 1</ambient>
+      <diffuse>1.0 0.82 0.12 1</diffuse>
+    </material>
+  </gazebo>
+
+  <gazebo reference="jaw">
+    <material>
+      <ambient>1.0 0.82 0.12 1</ambient>
+      <diffuse>1.0 0.82 0.12 1</diffuse>
+    </material>
+  </gazebo>
+
+  <gazebo reference="camera_mount">
+    <material>
+      <ambient>1.0 0.82 0.12 1</ambient>
+      <diffuse>1.0 0.82 0.12 1</diffuse>
+    </material>
+  </gazebo>
+
+  <gazebo reference="usb_camera">
+    <material>
+      <ambient>0.1 0.1 0.1 1</ambient>
+      <diffuse>0.1 0.1 0.1 1</diffuse>
+    </material>
+  </gazebo>
+
+  <!-- Wrist camera sensor (Ignition Gazebo) -->
+  <gazebo reference="camera_link">
+    <sensor name="wrist_camera" type="camera">
+      <pose>0 0 0 0 0 0</pose>
+      <always_on>1</always_on>
+      <update_rate>30</update_rate>
+      <visualize>true</visualize>
+      <ignition_frame_id>camera_link</ignition_frame_id>
+      <camera name="wrist_camera">
+        <horizontal_fov>1.7453</horizontal_fov>
+        <image>
+          <width>1280</width>
+          <height>720</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.01</near>
+          <far>10.0</far>
+        </clip>
+      </camera>
+      <topic>wrist_camera</topic>
+      <camera_info_topic>wrist_camera/camera_info</camera_info_topic>
+    </sensor>
+  </gazebo>
+
+</robot>

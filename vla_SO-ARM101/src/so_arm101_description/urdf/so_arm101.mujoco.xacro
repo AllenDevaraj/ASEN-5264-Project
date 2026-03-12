@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<!-- MuJoCo-specific xacro: world link + mock hardware ros2_control.
+     Replaces so_arm101.gazebo.xacro (no Gazebo plugins/materials/sensors). -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="so_arm101">
+
+  <!-- Fix the base to the world so the robot doesn't fall -->
+  <link name="world"/>
+  <joint name="world_to_base" type="fixed">
+    <parent link="world"/>
+    <child link="base"/>
+  </joint>
+
+  <!-- ros2_control hardware interface using mock components (same as control.launch.py) -->
+  <ros2_control name="MockSystem" type="system">
+    <hardware>
+      <plugin>mock_components/GenericSystem</plugin>
+    </hardware>
+
+    <joint name="shoulder_pan">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="shoulder_lift">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="elbow_flex">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="wrist_flex">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="wrist_roll">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="gripper_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+</robot>

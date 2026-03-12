@@ -1,0 +1,73 @@
+<mujoco model="so_arm101_scene">
+  <!-- Physics settings matching Gazebo SDF (timestep=0.001s) -->
+  <option timestep="0.001" gravity="0 0 -9.81" integrator="implicit"/>
+
+  <compiler angle="radian" meshdir="../meshes/"/>
+
+  <asset>
+    <texture type="2d" name="grid_tex" builtin="checker"
+             rgb1="0.8 0.8 0.8" rgb2="0.7 0.7 0.7"
+             width="512" height="512"/>
+    <material name="ground_mat" texture="grid_tex"
+              texrepeat="10 10" reflectance="0.1"/>
+    <material name="red_lego" rgba="0.9 0.1 0.1 1"/>
+    <material name="green_lego" rgba="0.1 0.8 0.1 1"/>
+    <material name="blue_lego" rgba="0.1 0.1 0.9 1"/>
+  </asset>
+
+  <!-- Lighting -->
+  <visual>
+    <headlight ambient="0.3 0.3 0.3" diffuse="0.4 0.4 0.4" specular="0.1 0.1 0.1"/>
+  </visual>
+
+  <worldbody>
+    <!-- Sun light (directional, matching SDF dir=-0.5 0.1 -0.9) -->
+    <light name="sun" pos="0 0 10" dir="-0.5 0.1 -0.9"
+           diffuse="0.9 0.9 0.9" specular="0.3 0.3 0.3"
+           castshadow="true" directional="true"/>
+
+    <!-- Fill light for better camera visibility -->
+    <light name="fill_light" pos="0 0 5" dir="0.5 -0.3 -0.7"
+           diffuse="0.4 0.4 0.4" specular="0.1 0.1 0.1"
+           castshadow="false" directional="true"/>
+
+    <!-- Ground plane with friction (mu=1.0 matching SDF) -->
+    <geom name="ground" type="plane" size="5 5 0.01"
+          material="ground_mat" friction="1.0 1.0 0.001"/>
+
+    <!--
+      LEGO bricks on the ground plane in front of the SO-ARM101.
+      Using mocap bodies so they can be repositioned at runtime via /mujoco/set_body_pose.
+      Ground truth positions (world frame):
+        red_lego_2x4:   (0.18,  0.03, 0.0055) yaw=0.8   size=32x16x11mm
+        green_lego_2x3: (0.20,  0.06, 0.0055) yaw=-0.4  size=24x16x11mm
+        blue_lego_2x2:  (0.22,  0.03, 0.0055) yaw=0.0   size=16x16x11mm
+    -->
+
+    <!-- Red lego 2x4: 32x16x11mm -->
+    <body name="red_lego_2x4" mocap="true"
+          pos="0.18 0.03 0.0055" quat="0.9211 0 0 0.3894">
+      <geom type="box" size="0.016 0.008 0.0055"
+            material="red_lego" contype="1" conaffinity="1" mass="0.005"/>
+    </body>
+
+    <!-- Green lego 2x3: 24x16x11mm -->
+    <body name="green_lego_2x3" mocap="true"
+          pos="0.20 0.06 0.0055" quat="0.9801 0 0 -0.1987">
+      <geom type="box" size="0.012 0.008 0.0055"
+            material="green_lego" contype="1" conaffinity="1" mass="0.005"/>
+    </body>
+
+    <!-- Blue lego 2x2: 16x16x11mm -->
+    <body name="blue_lego_2x2" mocap="true"
+          pos="0.22 0.03 0.0055" quat="1 0 0 0">
+      <geom type="box" size="0.008 0.008 0.0055"
+            material="blue_lego" contype="1" conaffinity="1" mass="0.005"/>
+    </body>
+
+    <!-- Wrist camera definition (specs: hfov=100deg=1.7453rad, 1280x720) -->
+    <!-- Camera is attached to robot at runtime; this defines default viewpoint -->
+    <camera name="overhead" pos="0.2 0 0.5" xyaxes="0 1 0 -1 0 0"
+            fovy="60" mode="fixed"/>
+  </worldbody>
+</mujoco>
