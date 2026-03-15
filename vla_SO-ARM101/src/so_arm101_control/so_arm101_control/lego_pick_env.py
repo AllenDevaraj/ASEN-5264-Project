@@ -157,12 +157,16 @@ class LegoPickEnv(gym.Env):
         self._ee_pos = np.zeros(3)
         self._prev_dist_to_block = None
         self._prev_dist_to_goal = None
+        self._reached_block = False  # one-time proximity milestone
+        self._reached_goal = False   # one-time proximity milestone
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self._step_count = 0
         self._holding_block = False
         self._gripper_closed = False
+        self._reached_block = False
+        self._reached_goal = False
 
         # 1. Draw episodic noise level
         self._sigma_ep = self.np_random.uniform(self.sigma_low, self.sigma_high)
@@ -273,7 +277,7 @@ class LegoPickEnv(gym.Env):
             self.pf.resample()
 
         # 8. Compute reward (phase-based dense shaping)
-        reward = -0.5  # small step cost
+        reward = -1.0  # step cost — must be meaningful to discourage dawdling
 
         target_xy = np.array([
             self._block_true_poses[TARGET_BLOCK][0],
@@ -288,60 +292,50 @@ class LegoPickEnv(gym.Env):
         if not self._holding_block:
             # --- PHASE 1: Approach the block ---
 
-            # Distance-based reward: closer to block = higher reward
+            # Potential-based approach shaping (per-step, bounded)
             if self._prev_dist_to_block is not None:
                 improvement = self._prev_dist_to_block - dist_to_block
-                reward += 2.0 * np.clip(improvement / 0.02, -1, 1)
+                reward += 3.0 * np.clip(improvement / 0.02, -1, 1)
             self._prev_dist_to_block = dist_to_block
 
-            # Proximity bonus: strong reward for being very close
-            if dist_to_block < 0.02:
-                reward += 1.0
-            if dist_to_block < 0.01:
-                reward += 2.0
-
-            # Height shaping: reward lowering toward table when near block
-            if dist_to_block < 0.03:
-                height_above_table = self._ee_pos[2] - TABLE_Z
-                reward += 1.0 * max(0, 1.0 - height_above_table / 0.05)
+            # One-time milestone: reached the block vicinity
+            if dist_to_block < 0.015 and not self._reached_block:
+                self._reached_block = True
+                reward += 5.0
 
             # Grasp outcomes
             if grasp_result == "fail":
-                reward -= 3.0
+                reward -= 2.0
             elif grasp_result == "success":
-                reward += 10.0  # big reward for successful grasp
-
-            # Check for release without holding (accidental open)
-            if self._holding_block is False and not want_close:
-                pass  # no penalty for keeping gripper open
+                reward += 15.0
 
         else:
             # --- PHASE 2: Carry block to goal ---
 
-            # Distance-based reward: closer to goal = higher reward
+            # Potential-based goal approach shaping
             if self._prev_dist_to_goal is not None:
                 improvement = self._prev_dist_to_goal - dist_to_goal
-                reward += 2.0 * np.clip(improvement / 0.02, -1, 1)
+                reward += 3.0 * np.clip(improvement / 0.02, -1, 1)
             self._prev_dist_to_goal = dist_to_goal
 
-            # Proximity bonus near goal
-            if dist_to_goal < 0.03:
-                reward += 1.0
+            # One-time milestone: reached the goal vicinity
+            if dist_to_goal < 0.03 and not self._reached_goal:
+                self._reached_goal = True
+                reward += 5.0
 
         # --- PHASE 3: Placement check ---
         if self._holding_block and not want_close:
-            # Just released the block
             self._holding_block = False
             self._release_block()
             dist_to_goal = np.linalg.norm(self._ee_pos[:2] - self._goal_pos)
             if dist_to_goal < 0.02:
-                reward += 20.0
+                reward += 25.0
                 terminated = True
             elif dist_to_goal < 0.04:
-                reward += 5.0
+                reward += 10.0
                 terminated = True
             else:
-                reward -= 5.0  # dropped far from goal
+                reward -= 5.0
             self._prev_dist_to_goal = None
 
         truncated = self._step_count >= self.MAX_STEPS
