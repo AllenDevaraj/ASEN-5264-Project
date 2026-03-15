@@ -156,6 +156,7 @@ class LegoPickEnv(gym.Env):
         self._holding_block = False
         self._ee_pos = np.zeros(3)
         self._prev_dist_to_block = None
+        self._prev_dist_to_goal = None
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -198,6 +199,7 @@ class LegoPickEnv(gym.Env):
             self._block_true_poses[TARGET_BLOCK][1],
         ])
         self._prev_dist_to_block = np.linalg.norm(self._ee_pos[:2] - target_xy)
+        self._prev_dist_to_goal = None  # set when holding block
 
         # 7. Reset particle filter (feed both cameras)
         if self.belief_mode:
@@ -270,38 +272,77 @@ class LegoPickEnv(gym.Env):
             self.pf.update(overhead_obs, SIGMA_OVERHEAD)
             self.pf.resample()
 
-        # 8. Compute reward
-        reward = -1.0  # step cost
+        # 8. Compute reward (phase-based dense shaping)
+        reward = -0.5  # small step cost
 
-        if grasp_result == "fail":
-            reward -= 5.0
-        elif grasp_result == "success":
-            pass  # no immediate reward for grasping; must place
+        target_xy = np.array([
+            self._block_true_poses[TARGET_BLOCK][0],
+            self._block_true_poses[TARGET_BLOCK][1],
+        ])
+        ee_xy = self._ee_pos[:2]
+        dist_to_block = np.linalg.norm(ee_xy - target_xy)
+        dist_to_goal = np.linalg.norm(ee_xy - self._goal_pos)
 
-        # Check placement
         terminated = False
+
+        if not self._holding_block:
+            # --- PHASE 1: Approach the block ---
+
+            # Distance-based reward: closer to block = higher reward
+            if self._prev_dist_to_block is not None:
+                improvement = self._prev_dist_to_block - dist_to_block
+                reward += 2.0 * np.clip(improvement / 0.02, -1, 1)
+            self._prev_dist_to_block = dist_to_block
+
+            # Proximity bonus: strong reward for being very close
+            if dist_to_block < 0.02:
+                reward += 1.0
+            if dist_to_block < 0.01:
+                reward += 2.0
+
+            # Height shaping: reward lowering toward table when near block
+            if dist_to_block < 0.03:
+                height_above_table = self._ee_pos[2] - TABLE_Z
+                reward += 1.0 * max(0, 1.0 - height_above_table / 0.05)
+
+            # Grasp outcomes
+            if grasp_result == "fail":
+                reward -= 3.0
+            elif grasp_result == "success":
+                reward += 10.0  # big reward for successful grasp
+
+            # Check for release without holding (accidental open)
+            if self._holding_block is False and not want_close:
+                pass  # no penalty for keeping gripper open
+
+        else:
+            # --- PHASE 2: Carry block to goal ---
+
+            # Distance-based reward: closer to goal = higher reward
+            if self._prev_dist_to_goal is not None:
+                improvement = self._prev_dist_to_goal - dist_to_goal
+                reward += 2.0 * np.clip(improvement / 0.02, -1, 1)
+            self._prev_dist_to_goal = dist_to_goal
+
+            # Proximity bonus near goal
+            if dist_to_goal < 0.03:
+                reward += 1.0
+
+        # --- PHASE 3: Placement check ---
         if self._holding_block and not want_close:
             # Just released the block
             self._holding_block = False
             self._release_block()
             dist_to_goal = np.linalg.norm(self._ee_pos[:2] - self._goal_pos)
-            if dist_to_goal < 0.015:
-                reward += 10.0
+            if dist_to_goal < 0.02:
+                reward += 20.0
+                terminated = True
+            elif dist_to_goal < 0.04:
+                reward += 5.0
                 terminated = True
             else:
-                reward -= 2.0  # penalty for dropping far from goal
-
-        # Approach shaping (only when not holding)
-        if self.approach_shaping and not self._holding_block and not terminated:
-            target_xy = np.array([
-                self._block_true_poses[TARGET_BLOCK][0],
-                self._block_true_poses[TARGET_BLOCK][1],
-            ])
-            dist = np.linalg.norm(self._ee_pos[:2] - target_xy)
-            if self._prev_dist_to_block is not None:
-                improvement = self._prev_dist_to_block - dist
-                reward += 0.5 * np.clip(improvement / 0.02, -1, 1)
-            self._prev_dist_to_block = dist
+                reward -= 5.0  # dropped far from goal
+            self._prev_dist_to_goal = None
 
         truncated = self._step_count >= self.MAX_STEPS
 
