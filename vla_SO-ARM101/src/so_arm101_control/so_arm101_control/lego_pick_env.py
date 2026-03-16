@@ -134,8 +134,9 @@ class LegoPickEnv(gym.Env):
             high=np.array([0.02, 0.02, 0.02, 1.0], dtype=np.float32),
         )
 
-        # Observation space (12D for both modes)
-        obs_dim = 12
+        # Observation space (18D for both modes)
+        # [6 joints + 3 block obs/mu + 3 block obs/sigma + 3 ee_pos + 2 goal_xy + 1 holding]
+        obs_dim = 18
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -556,7 +557,16 @@ class LegoPickEnv(gym.Env):
             )
 
     def _build_observation(self):
-        """Construct observation vector."""
+        """Construct 18D observation vector.
+
+        Layout:
+          [0:6]   joint angles + gripper
+          [6:9]   block obs (wrist noisy / PF mu)
+          [9:12]  block obs (overhead noisy / PF sigma)
+          [12:15] end-effector position (x, y, z)
+          [15:17] goal position (x, y)
+          [17]    holding flag (0 or 1)
+        """
         # Joint angles
         joint_obs = []
         for name in ARM_JOINT_NAMES:
@@ -567,15 +577,22 @@ class LegoPickEnv(gym.Env):
         gripper_val = self.data.qpos[self.joint_map["gripper_joint"]]
         joint_obs.append(gripper_val)
 
+        # Common suffix: EE pos, goal, holding
+        ee_obs = self._ee_pos.tolist()
+        goal_obs = self._goal_pos.tolist()
+        holding_obs = [1.0 if self._holding_block else 0.0]
+
         if self.belief_mode:
             mu, sigma = self.pf.get_belief()
             return np.concatenate(
-                [joint_obs, mu[0], sigma[0]]
+                [joint_obs, mu[0], sigma[0], ee_obs, goal_obs, holding_obs]
             ).astype(np.float32)
         else:
             wrist_obs = self._get_noisy_target_obs()
             overhead_obs = self._get_overhead_noisy_obs()
-            return np.concatenate([joint_obs, wrist_obs, overhead_obs]).astype(np.float32)
+            return np.concatenate(
+                [joint_obs, wrist_obs, overhead_obs, ee_obs, goal_obs, holding_obs]
+            ).astype(np.float32)
 
     def render(self):
         if self.render_mode == "rgb_array":

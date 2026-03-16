@@ -222,17 +222,17 @@ def test_observation_dimensions():
     """Test 8: Observation dimensions correct for both modes."""
     from so_arm101_control.lego_pick_env import LegoPickEnv
 
-    # Plain mode: 12D (6 joints + 3 wrist + 3 overhead)
+    # Plain mode: 18D (6 joints + 3 wrist + 3 overhead + 3 ee + 2 goal + 1 holding)
     env1 = LegoPickEnv(belief_mode=False)
     obs1, _ = env1.reset(seed=0)
-    assert obs1.shape == (12,), f"Plain obs shape {obs1.shape} != (12,)"
+    assert obs1.shape == (18,), f"Plain obs shape {obs1.shape} != (18,)"
     env1.close()
     print(f"  Plain mode: obs shape = {obs1.shape}")
 
-    # Belief mode: 12D
+    # Belief mode: 18D (6 joints + 3 mu + 3 sigma + 3 ee + 2 goal + 1 holding)
     env2 = LegoPickEnv(belief_mode=True)
     obs2, _ = env2.reset(seed=0)
-    assert obs2.shape == (12,), f"Belief obs shape {obs2.shape} != (12,)"
+    assert obs2.shape == (18,), f"Belief obs shape {obs2.shape} != (18,)"
     env2.close()
     print(f"  Belief mode: obs shape = {obs2.shape}")
 
