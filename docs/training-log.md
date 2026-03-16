@@ -80,11 +80,48 @@ Tracks every training run, reward change, and fix for the final report.
 
 ---
 
-## Run 3: Plain PPO — One-Time Milestones (PENDING)
+## Run 3: Plain PPO — One-Time Milestones (FAILED — Missing Goal in Obs)
 
 **Date:** 2026-03-16
-**Config:** `--timesteps 2000000 --n-envs 3`, Plain PPO
-**Status:** Training...
+**Config:** `--timesteps 2000000 --n-envs 3`, Plain PPO, 12D obs
+**Reward design:** One-time milestones, +3.0 approach shaping, +15 grasp, +25 placement
+
+**Results:**
+| Metric | Value |
+|---|---|
+| Mean reward | -185.5 +/- 6.0 |
+| Success rate | 0% |
+| Episode length | 200 (always timeout) |
+| Grasp attempts | 0 |
+| Max reward | -164.1 |
+
+**Diagnosis:** Agent learned to approach block (reward improved from -199 to -185.5) but never attempted a grasp. Root cause: **the goal position was missing from the observation**. The agent had no idea where to place the block, making grasping pointless from the agent's perspective — even if it grasped, it couldn't learn to carry to an invisible goal. Additionally, the EE position was not in the observation, forcing the network to learn forward kinematics from joint angles (a hard nonlinear function).
+
+**Lesson:** Always verify the observation contains all information needed to solve the task. If the agent can't observe the goal, it can't learn the task — no amount of reward shaping fixes a missing observation.
+
+---
+
+## Observation Fix: Added Goal, EE Position, Holding Flag
+
+**Date:** 2026-03-16 (commit `79ec028`)
+**Obs changed from 12D to 18D for both modes:**
+
+```
+[0:6]   joint angles + gripper
+[6:9]   block obs (wrist noisy / PF mu)
+[9:12]  block obs (overhead noisy / PF sigma)
+[12:15] end-effector position (x, y, z)    ← NEW
+[15:17] goal position (x, y)               ← NEW (critical!)
+[17]    holding flag (0 or 1)               ← NEW
+```
+
+---
+
+## Run 4: Plain PPO — 18D Obs with Goal + EE (PENDING)
+
+**Date:** 2026-03-16
+**Config:** `--timesteps 2000000 --n-envs 3`, Plain PPO, 18D obs
+**Status:** Awaiting training...
 
 ---
 
@@ -98,6 +135,7 @@ Tracks every training run, reward change, and fix for the final report.
 | 2026-03-15 | Added overhead camera with top-down occlusion | `9866f52` | 12D obs for both modes, dual PF updates |
 | 2026-03-16 | Dense reward v1 (per-step proximity) | `135cb31` | Reward exploit discovered |
 | 2026-03-16 | Dense reward v2 (one-time milestones) | `f4dfbcb` | Fixes reward exploit |
+| 2026-03-16 | Added goal_xy, ee_pos, holding to obs (12D→18D) | `79ec028` | Agent can now see the goal and its own EE position |
 
 ## Dependencies Installed
 
