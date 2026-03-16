@@ -304,11 +304,15 @@ class LegoPickEnv(gym.Env):
                 self._reached_block = True
                 reward += 5.0
 
+            # Encourage gripper close when near block (exploration signal)
+            if want_close and dist_to_block < 0.025:
+                reward += 2.0  # reward for trying, regardless of outcome
+
             # Grasp outcomes
             if grasp_result == "fail":
-                reward -= 2.0
+                reward -= 1.0
             elif grasp_result == "success":
-                reward += 15.0
+                reward += 20.0
 
         else:
             # --- PHASE 2: Carry block to goal ---
