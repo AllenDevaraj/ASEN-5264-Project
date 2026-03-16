@@ -117,10 +117,43 @@ Tracks every training run, reward change, and fix for the final report.
 
 ---
 
-## Run 4: Plain PPO — 18D Obs with Goal + EE (PENDING)
+## Run 4: Plain PPO — 18D Obs with Goal + EE (FAILED — No Gripper Exploration)
 
 **Date:** 2026-03-16
 **Config:** `--timesteps 2000000 --n-envs 3`, Plain PPO, 18D obs
+
+**Results:**
+| Metric | Value |
+|---|---|
+| Mean reward | -183.3 +/- 8.9 |
+| Success rate | 0% |
+| Episode length | 200 (always timeout) |
+| Grasp attempts | 0 |
+| Max reward | -144.0 |
+
+**Diagnosis:** Approach improved (max reward -144 vs -164 before — EE position in obs helped), but agent still never closes gripper. The policy converged on "always keep gripper open" because there was no gradient connecting gripper-close to any reward. Even though grasping has positive expected value near the block, the agent never explores it because entropy collapsed early in training.
+
+**Lesson:** In continuous action spaces with discrete-like effects (gripper open/close), the policy can converge away from a critical action dimension before discovering its reward. Need explicit exploration encouragement.
+
+---
+
+## Exploration Fix: Gripper Reward + Higher Entropy
+
+**Date:** 2026-03-16 (commit `9e71be2`)
+
+| Change | Old | New | Rationale |
+|---|---|---|---|
+| Gripper close near block | No reward | +2.0 within 25mm | Direct gradient for gripper-close |
+| Grasp fail penalty | -2.0 | -1.0 | Lower penalty = more willing to try |
+| Grasp success reward | +15.0 | +20.0 | Bigger carrot |
+| ent_coef (PPO hyperparams) | 0.01 | 0.05 | 5x more exploration pressure |
+
+---
+
+## Run 5: Plain PPO — Gripper Exploration + Higher Entropy (PENDING)
+
+**Date:** 2026-03-16
+**Config:** `--timesteps 2000000 --n-envs 3`, Plain PPO, 18D obs, ent_coef=0.05
 **Status:** Awaiting training...
 
 ---
@@ -136,6 +169,7 @@ Tracks every training run, reward change, and fix for the final report.
 | 2026-03-16 | Dense reward v1 (per-step proximity) | `135cb31` | Reward exploit discovered |
 | 2026-03-16 | Dense reward v2 (one-time milestones) | `f4dfbcb` | Fixes reward exploit |
 | 2026-03-16 | Added goal_xy, ee_pos, holding to obs (12D→18D) | `79ec028` | Agent can now see the goal and its own EE position |
+| 2026-03-16 | Gripper exploration reward + ent_coef 0.01→0.05 | `9e71be2` | Direct gradient for gripper close near block |
 
 ## Dependencies Installed
 
