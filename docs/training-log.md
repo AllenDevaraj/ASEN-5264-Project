@@ -150,11 +150,105 @@ Tracks every training run, reward change, and fix for the final report.
 
 ---
 
-## Run 5: Plain PPO — Gripper Exploration + Higher Entropy (PENDING)
+## Run 5: Plain PPO — Gripper Exploration + Higher Entropy (FAILED — Gripper Close Exploit)
 
 **Date:** 2026-03-16
 **Config:** `--timesteps 2000000 --n-envs 3`, Plain PPO, 18D obs, ent_coef=0.05
-**Status:** Awaiting training...
+
+**Results:**
+| Metric | Value |
+|---|---|
+| Mean reward | +167.0 |
+| Success rate | 0% |
+| Episode length | 200 (always timeout) |
+| Grasp successes | 0 |
+| Grasp attempts | ~1.0/episode |
+| Gripper closed ratio | ~100% near block |
+
+**Diagnosis:** Agent found another exploit — it learned to keep the gripper permanently closed while hovering near the block, collecting the +2.0/step gripper-close-near-block reward continuously. This is the same class of bug as Run 2 (per-step proximity exploit), just applied to the gripper dimension. The agent never actually attempted a real grasp because keeping the gripper closed earned more than risking the grasp outcome.
+
+**Lesson:** Any per-step reward for a binary action (gripper open/close) will be exploited. Gripper rewards must be transition-based (fire only on the open→close transition), not state-based (fire every step gripper is closed).
+
+---
+
+## Reward Fix: Transition-Based Gripper Reward
+
+**Date:** 2026-03-16
+**Changes applied:**
+
+| Component | Old | New | Rationale |
+|---|---|---|---|
+| Gripper close near block | +2.0/step when closed within 25mm | Removed (transition-only) | Per-step was exploitable |
+| Grasp success | +20.0 | +20.0 (unchanged) | Fires on close transition only |
+| Grasp fail (very close) | -1.0 | +2.0 if <15mm | Reward good attempts even if unlucky |
+| Grasp fail (close) | -1.0 | -0.5 if <25mm | Mild penalty, still encourages trying |
+| Grasp fail (far) | -1.0 | -2.0 if >25mm | Penalize wasteful attempts |
+
+**Key design change:** All gripper rewards now fire only on the `want_close and not self._gripper_closed` transition. No reward accumulates while gripper stays closed.
+
+---
+
+## Run 6: Plain PPO — Transition-Based Gripper Reward (SUCCESS)
+
+**Date:** 2026-03-17
+**Config:** `--timesteps 2000000 --n-envs 2`, Plain PPO, 18D obs, ent_coef=0.05
+
+**Results:**
+| Metric | Value |
+|---|---|
+| Precise placement (<20mm) | **52%** |
+| Close placement (<40mm) | **33%** |
+| Total task completion | **85%** |
+| Grasp success rate | 100% (1.0/ep) |
+| Mean reward | 38.1 +/- 17.2 |
+| Mean episode length | 21.4 steps |
+| Reward range | [-26.4, 66.9] |
+
+**Diagnosis:** First successful training! The transition-based gripper reward eliminated the exploit. The agent learned the full pick-and-place pipeline: approach → grasp → carry → place. 85% of episodes end with successful placement. Reward curve shows learning: -207 (10k) → -119 (400k) → +16 (600k) → +42 plateau (800k+).
+
+**Note:** Initial eval reported 0% success due to missing `success` key in info dict — fixed by adding `placement_success` flag. The agent was succeeding all along from this run.
+
+**Lesson:** Transition-based rewards for binary actions are the correct approach. The full reward structure (approach shaping + one-time milestones + transition-based grasp + carry shaping + placement terminal) works for multi-phase manipulation.
+
+---
+
+## Belief PPO Run 1: Particle Filter + PPO (SUCCESS)
+
+**Date:** 2026-03-17
+**Config:** `--timesteps 2000000 --n-envs 3`, Belief PPO, 18D obs (PF mu/sigma), ent_coef=0.05
+
+**Results:**
+| Metric | Value |
+|---|---|
+| Precise placement (<20mm) | **34%** |
+| Close placement (<40mm) | **63%** |
+| Total task completion | **97%** |
+| Grasp success rate | 100% (1.0/ep) |
+| Mean reward | 21.5 +/- 41.5 |
+| Mean episode length | 37.5 steps |
+| Grasp attempts/ep | 11.5 |
+| Reward range | [-205.7, 65.6] |
+
+**Learning curve:** -204 (10k) → -189 (400k) → -127 (800k, high variance) → +27 (1.4M) → +36 plateau (1.6M+). Slower to learn than Plain PPO (plateaued at 1.4M vs 600k) but converged to higher completion rate.
+
+**Diagnosis:** Belief PPO achieves higher task completion (97% vs 85%) but lower precision (34% vs 52% within 20mm). The PF belief state (mu, sigma) provides more consistent observations, improving reliability. However, the added uncertainty representation (sigma dimensions) may make fine positioning harder — the policy is more cautious, taking more grasp attempts and longer episodes.
+
+**Lesson:** Belief augmentation improves robustness under observation noise at the cost of speed and precision. This is the expected POMDP trade-off: better state estimation → more reliable completion, but the richer observation space requires more exploration to master.
+
+---
+
+## Head-to-Head: Plain PPO vs Belief PPO
+
+| Metric | Plain PPO | Belief PPO | Winner |
+|---|---|---|---|
+| Total completion | 85% | **97%** | Belief |
+| Precise placement | **52%** | 34% | Plain |
+| Close placement | 33% | **63%** | Belief |
+| Episode length | **21.4** | 37.5 | Plain |
+| Grasp attempts/ep | **7.0** | 11.5 | Plain |
+| Reward variance | **17.2** | 41.5 | Plain |
+
+**Summary:** Plain PPO is faster and more precise when it succeeds. Belief PPO is more reliable — it almost always completes the task but takes longer and is less precise. This matches the theoretical prediction: belief-augmented policies are more robust to observation noise but the expanded state space is harder to optimize.
 
 ---
 
@@ -170,6 +264,7 @@ Tracks every training run, reward change, and fix for the final report.
 | 2026-03-16 | Dense reward v2 (one-time milestones) | `f4dfbcb` | Fixes reward exploit |
 | 2026-03-16 | Added goal_xy, ee_pos, holding to obs (12D→18D) | `79ec028` | Agent can now see the goal and its own EE position |
 | 2026-03-16 | Gripper exploration reward + ent_coef 0.01→0.05 | `9e71be2` | Direct gradient for gripper close near block |
+| 2026-03-16 | Transition-based gripper reward (fix exploit) | — | Gripper reward only on open→close transition, distance-dependent outcomes |
 
 ## Dependencies Installed
 

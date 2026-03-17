@@ -1,0 +1,57 @@
+\documentclass{article}
+\usepackage{graphicx}
+\usepackage[margin=1in, top=0.65in]{geometry}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{hyperref}
+\usepackage{amsmath,amssymb}
+
+\hypersetup{colorlinks=true, urlcolor=blue, linkcolor=blue}
+
+\titleformat{\section}{\large\bfseries}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries}{}{0em}{}
+\titlespacing*{\section}{0pt}{6pt}{4pt}
+
+\setlist[enumerate]{noitemsep, topsep=2pt}
+\setlist[itemize]{noitemsep, topsep=2pt}
+
+\title{ASEN 5264 Proposal}
+\author{Allen Devaraj Augustin Ponraj}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+\vspace{-12pt}
+
+\section{Title \& Goal}
+
+\textbf{Robot Pick-and-Place Under Observation Uncertainty.} I propose to compare three decision-making approaches for a simulated robot arm performing pick-and-place of a target block under \emph{observation uncertainty}: (1)~a baseline policy that sees only noisy observations; (2)~a belief-augmented policy that uses a particle filter and learns when to gather information vs.\ act; and (3)~a stretch goal using POMCP with a learned world model. The setting is a POMDP: the true block pose is hidden; the agent receives noisy or intermittent pose estimates and pays a cost per timestep (cost of looking), creating a clear exploration--exploitation trade-off.
+
+\section{Uncertainty Model}
+
+I inject three forms of observation uncertainty (no camera hardware model by default):
+
+\begin{itemize}
+  \item \textbf{Episodic noise:} Each episode gets a different observation noise level $\sigma_{\text{ep}}$ so some episodes are easy and some hard.
+  \item \textbf{Multi-block occlusion:} A distractor block can occlude the target (as lego blocks are spawned in random places for each episode) from the camera so the agent sometimes receives no pose update (or stale).
+  \item \textbf{Cost of looking:} A step penalty so that gathering information (e.g., moving to un-occlude or waiting for more observations) trades off with acting.
+\end{itemize}
+
+\section{Methods}
+
+\begin{enumerate}
+  \item \textbf{Plain PPO (baseline):} The agent observes raw noisy pose estimates and joint state. I train with PPO (e.g., Stable-Baselines3) to establish a ceiling for ``ignoring uncertainty.''
+  \item \textbf{Belief-Augmented PPO (main):} A particle filter maintains a belief over block pose; the agent observes belief summary statistics (mean and variance). Same PPO architecture and reward. The agent learns \emph{when} to look (reduce uncertainty) vs.\ when to grasp (exploit), i.e., exploration-exploitation under cost of looking.
+  \item \textbf{POMCP with learned world model (stretch):} Use a learned transition model (trained on data from the belief-augmented policy) to run POMCP tree search over the belief state, with the same action space and reward.
+\end{enumerate}
+
+\section{Task \& Metrics}
+
+Task: pick the target block and place it at a random goal; max steps per episode with step penalty. Success is placement within a threshold of the goal. Metrics: success rate; mean steps to success (efficiency); steps and $\sigma$ at grasp time (whether the agent waited for confidence); success vs.\ $\sigma_{\text{ep}}$ sweep (robustness).
+
+\section{Deliverables}
+
+A Gymnasium-compatible pick-and-place environment with the above uncertainty sources; trained policies for the baseline and belief-augmented methods (and optionally POMCP); comparison plots (learning curves, success vs.\ noise, $\sigma$ at grasp); short video demos; and a final report summarizing the comparison and lessons for decision making under uncertainty.
+
+\end{document}

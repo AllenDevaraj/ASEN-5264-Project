@@ -289,6 +289,7 @@ class LegoPickEnv(gym.Env):
         dist_to_goal = np.linalg.norm(ee_xy - self._goal_pos)
 
         terminated = False
+        placement_success = False
 
         if not self._holding_block:
             # --- PHASE 1: Approach the block ---
@@ -304,15 +305,16 @@ class LegoPickEnv(gym.Env):
                 self._reached_block = True
                 reward += 5.0
 
-            # Encourage gripper close when near block (exploration signal)
-            if want_close and dist_to_block < 0.025:
-                reward += 2.0  # reward for trying, regardless of outcome
-
-            # Grasp outcomes
-            if grasp_result == "fail":
-                reward -= 1.0
-            elif grasp_result == "success":
+            # Grasp outcomes (grasp_result is set only on gripper close transition)
+            if grasp_result == "success":
                 reward += 20.0
+            elif grasp_result == "fail":
+                if dist_to_block < 0.015:
+                    reward += 2.0   # good attempt, just unlucky
+                elif dist_to_block < 0.025:
+                    reward -= 0.5   # close but not close enough
+                else:
+                    reward -= 2.0   # too far, penalize
 
         else:
             # --- PHASE 2: Carry block to goal ---
@@ -336,9 +338,11 @@ class LegoPickEnv(gym.Env):
             if dist_to_goal < 0.02:
                 reward += 25.0
                 terminated = True
+                placement_success = True
             elif dist_to_goal < 0.04:
                 reward += 10.0
                 terminated = True
+                placement_success = True
             else:
                 reward -= 5.0
             self._prev_dist_to_goal = None
@@ -353,6 +357,7 @@ class LegoPickEnv(gym.Env):
             "holding": self._holding_block,
             "ee_pos": self._ee_pos.copy(),
             "overhead_occluded": self._is_target_occluded_overhead(),
+            "success": placement_success,
         }
         if self.belief_mode:
             mu, sigma = self.pf.get_belief()
