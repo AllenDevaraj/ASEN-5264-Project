@@ -252,6 +252,41 @@ Tracks every training run, reward change, and fix for the final report.
 
 ---
 
+## Run 8 (both): Precision Reward Tuning (FAILED — Fine-Positioning Exploit)
+
+**Date:** 2026-03-17
+**Changes:** Added +2.0/step within 15mm of goal while holding, +1.0/step within 25mm, reduced carry step cost to -0.5, added +50 perfect (<10mm) tier.
+
+**Results:** Both agents found the exploit — hovering near goal while holding for +2.0/step for 200 steps. Mean reward +160 (Plain) / +131 (Belief), 0% completion, ep length 200.
+
+**Fix:** Removed per-step fine-positioning bonus, restored step cost to -1.0. Kept the stronger placement tiers (+50/+30/+10) and carry shaping (+5.0 coefficient). The large gap between +50 (perfect) and +10 (close) should incentivize precision without per-step exploits.
+
+**Lesson (3rd time):** NEVER use per-step rewards for being in a location. Always use one-time milestones or transition-based rewards. This applies equally during carry phase.
+
+---
+
+## Run 9: Both Agents — Stronger Carry Shaping + Tiered Placement (SUCCESS)
+
+**Date:** 2026-03-17
+**Config:** `--timesteps 2000000 --n-envs 2`, both agents, 18D obs, ent_coef=0.05
+**Reward changes:** Carry shaping 3.0→5.0, placement tiers +50/+30/+10 (was +25/+10), miss penalty -5→-10, no per-step bonuses.
+
+**Results:**
+| Metric | Plain PPO | Belief PPO |
+|---|---|---|
+| Total completion | **100%** | **100%** |
+| Perfect (<10mm) | **62%** | 60% |
+| Precise (<20mm) | 19% | **25%** |
+| Close (<40mm) | **19%** | 15% |
+| Mean reward | 59.9 +/- 26.5 | 59.1 +/- 27.0 |
+| Mean ep length | **25.7** | 28.6 |
+| Grasp success/ep | 1.0 | 1.0 |
+| Min reward | **-6.3** | -26.6 |
+
+**Diagnosis:** Both agents achieve 100% task completion with ~60% perfect placement. The stronger carry shaping (+5.0) and large placement reward gap (+50 vs +10) successfully incentivize precision without creating exploits. Performance is very similar between the two methods — differentiation expected under heavier observation noise (ablation with `--camera-noise`).
+
+---
+
 ## Architecture Changes Log
 
 | Date | Change | Commit | Impact |

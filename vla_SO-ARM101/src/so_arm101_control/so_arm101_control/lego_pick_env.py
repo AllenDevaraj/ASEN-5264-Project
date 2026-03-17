@@ -278,8 +278,6 @@ class LegoPickEnv(gym.Env):
             self.pf.resample()
 
         # 8. Compute reward (phase-based dense shaping)
-        reward = -1.0  # step cost — must be meaningful to discourage dawdling
-
         target_xy = np.array([
             self._block_true_poses[TARGET_BLOCK][0],
             self._block_true_poses[TARGET_BLOCK][1],
@@ -293,6 +291,7 @@ class LegoPickEnv(gym.Env):
 
         if not self._holding_block:
             # --- PHASE 1: Approach the block ---
+            reward = -1.0  # step cost
 
             # Potential-based approach shaping (per-step, bounded)
             if self._prev_dist_to_block is not None:
@@ -318,11 +317,12 @@ class LegoPickEnv(gym.Env):
 
         else:
             # --- PHASE 2: Carry block to goal ---
+            reward = -1.0  # same step cost — no free hovering
 
-            # Potential-based goal approach shaping
+            # Stronger potential-based goal approach shaping
             if self._prev_dist_to_goal is not None:
                 improvement = self._prev_dist_to_goal - dist_to_goal
-                reward += 3.0 * np.clip(improvement / 0.02, -1, 1)
+                reward += 5.0 * np.clip(improvement / 0.02, -1, 1)
             self._prev_dist_to_goal = dist_to_goal
 
             # One-time milestone: reached the goal vicinity
@@ -335,16 +335,20 @@ class LegoPickEnv(gym.Env):
             self._holding_block = False
             self._release_block()
             dist_to_goal = np.linalg.norm(self._ee_pos[:2] - self._goal_pos)
-            if dist_to_goal < 0.02:
-                reward += 25.0
+            if dist_to_goal < 0.01:
+                reward += 50.0   # perfect placement
+                terminated = True
+                placement_success = True
+            elif dist_to_goal < 0.02:
+                reward += 30.0   # precise placement
                 terminated = True
                 placement_success = True
             elif dist_to_goal < 0.04:
-                reward += 10.0
+                reward += 10.0   # close but imprecise
                 terminated = True
                 placement_success = True
             else:
-                reward -= 5.0
+                reward -= 10.0   # missed badly
             self._prev_dist_to_goal = None
 
         truncated = self._step_count >= self.MAX_STEPS
