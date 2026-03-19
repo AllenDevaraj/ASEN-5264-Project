@@ -32,9 +32,10 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from ament_index_python.packages import get_package_share_directory
 from builtin_interfaces.msg import Time
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import CameraInfo, Image, JointState
+from tf2_msgs.msg import TFMessage
 
 
 def resolve_package_uris(xml_string):
@@ -279,6 +280,11 @@ class MujocoSimNode(Node):
         cam_period = 1.0 / self.cam_fps
         self.create_timer(cam_period, self._render_camera)
 
+        # Block pose publisher (10Hz) — publishes mocap body positions as TFMessage
+        self._block_names = ['red_lego_2x4', 'green_lego_2x3', 'blue_lego_2x2']
+        self.objects_pub = self.create_publisher(TFMessage, '/objects_poses_sim', 10)
+        self.create_timer(0.1, self._publish_block_poses)
+
         # Launch viewer in separate thread if not headless
         self._viewer_handle = None
         if not self.headless:
@@ -368,6 +374,38 @@ class MujocoSimNode(Node):
         with self._lock:
             self.data.mocap_pos[mocap_id] = [p.x, p.y, p.z]
             self.data.mocap_quat[mocap_id] = [q.w, q.x, q.y, q.z]
+
+    def _publish_block_poses(self):
+        """Publish mocap body positions as TFMessage on /objects_poses_sim."""
+        msg = TFMessage()
+        with self._lock:
+            for name in self._block_names:
+                body_id = mujoco.mj_name2id(
+                    self.model, mujoco.mjtObj.mjOBJ_BODY, name)
+                if body_id < 0:
+                    continue
+                mocap_id = self.model.body_mocapid[body_id]
+                if mocap_id < 0:
+                    continue
+
+                pos = self.data.mocap_pos[mocap_id].copy()
+                quat = self.data.mocap_quat[mocap_id].copy()  # [w, x, y, z]
+
+                tf = TransformStamped()
+                tf.header.stamp = self.get_clock().now().to_msg()
+                tf.header.frame_id = 'base'
+                tf.child_frame_id = name
+                tf.transform.translation.x = float(pos[0])
+                tf.transform.translation.y = float(pos[1])
+                tf.transform.translation.z = float(pos[2])
+                tf.transform.rotation.x = float(quat[1])
+                tf.transform.rotation.y = float(quat[2])
+                tf.transform.rotation.z = float(quat[3])
+                tf.transform.rotation.w = float(quat[0])
+                msg.transforms.append(tf)
+
+        if msg.transforms:
+            self.objects_pub.publish(msg)
 
     def _physics_step(self):
         """Update MuJoCo kinematics and publish /clock.

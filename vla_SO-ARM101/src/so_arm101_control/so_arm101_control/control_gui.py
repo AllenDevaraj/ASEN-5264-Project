@@ -11,6 +11,8 @@ Source: adapted from RoboSort/JETANK_description/jetank_control_gui.py (3133 lin
 import math
 import os
 import random
+
+import numpy as np
 import signal
 import threading
 import time
@@ -25,7 +27,7 @@ from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from control_msgs.action import FollowJointTrajectory
-from builtin_interfaces.msg import Duration
+from builtin_interfaces.msg import Duration, Time
 from geometry_msgs.msg import Pose, PoseStamped
 from tf2_msgs.msg import TFMessage
 from std_msgs.msg import String
@@ -272,6 +274,11 @@ class SOArm101ControlGUI(Node):
             String, _default_bbox, self._bbox_callback, 1)
         self.ee_pose_sub = self.create_subscription(
             PoseStamped, '/ee_pose', self._ee_pose_callback, 10)
+
+        # MuJoCo body pose publisher (for RL block randomization / held block)
+        self._set_body_pose_pub = self.create_publisher(
+            PoseStamped, '/mujoco/set_body_pose', 10)
+        self._rl_running = False
 
         # MoveIt service clients + publishers
         self.ik_client = None
@@ -583,7 +590,7 @@ class SOArm101ControlGUI(Node):
             return
 
         traj = JointTrajectory()
-        traj.header.stamp = self.get_clock().now().to_msg()
+        traj.header.stamp = Time(sec=0, nanosec=0)  # zero = "start now" in controller's clock
         traj.joint_names = list(ARM_JOINT_NAMES)
         point = JointTrajectoryPoint()
         point.positions = [positions.get(n, 0.0) for n in ARM_JOINT_NAMES]
@@ -624,7 +631,7 @@ class SOArm101ControlGUI(Node):
             return
 
         traj = JointTrajectory()
-        traj.header.stamp = self.get_clock().now().to_msg()
+        traj.header.stamp = Time(sec=0, nanosec=0)  # zero = "start now" in controller's clock
         traj.joint_names = ['gripper_joint']
         point = JointTrajectoryPoint()
         point.positions = [jaw_position]
@@ -1747,6 +1754,31 @@ class SOArm101ControlGUI(Node):
         tk.Button(grip_btn_row2, text='Close', bg='#b0b0b0', fg='#1a1a1a',
                   command=self._cmd_gripper_close_range).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
 
+        # --- RL Policy Section ---
+        rl_frame = ttk.LabelFrame(frame, text='RL Policy')
+        rl_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        rl_row = tk.Frame(rl_frame)
+        rl_row.pack(fill=tk.X, padx=5, pady=2)
+        tk.Label(rl_row, text='Model:', anchor='w').pack(side=tk.LEFT)
+        self._rl_model_var = tk.StringVar(value='ppo_plain')
+        tk.OptionMenu(rl_row, self._rl_model_var, 'ppo_plain', 'ppo_belief').pack(
+            side=tk.LEFT, padx=5)
+
+        self._rl_pick_btn = tk.Button(
+            rl_frame, text='Pick (RL)', bg='#4a9eff', fg='white',
+            command=self._cmd_rl_pick)
+        self._rl_pick_btn.pack(fill=tk.X, padx=5, pady=2)
+
+        self._rl_stop_btn = tk.Button(
+            rl_frame, text='Stop RL', bg='#ff4a4a', fg='white',
+            command=self._cmd_rl_stop, state=tk.DISABLED)
+        self._rl_stop_btn.pack(fill=tk.X, padx=5, pady=2)
+
+        self._rl_status_var = tk.StringVar(value='Idle')
+        tk.Label(rl_frame, textvariable=self._rl_status_var,
+                 font=('Consolas', 9)).pack(fill=tk.X, padx=5, pady=2)
+
         # Initial subscription to default topic
         self._cmd_grasp_update_topic()
 
@@ -2687,6 +2719,262 @@ class SOArm101ControlGUI(Node):
         if hasattr(self, '_tcp_clearance_var'):
             self._tcp_clearance_var.set(val)
         self._append_log(f'TCP clearance set to {val:.1f}mm')
+
+    # ------------------------------------------------------------------
+    # RL Policy Execution
+    # ------------------------------------------------------------------
+
+    def _cmd_rl_pick(self):
+        """Start RL policy execution in a background thread."""
+        if self._rl_running:
+            self._append_log('RL policy already running', 'warn')
+            return
+
+        model_name = self._rl_model_var.get()
+        belief_mode = (model_name == 'ppo_belief')
+
+        # Resolve model path — check source tree first, then installed path
+        src_scripts = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            '..', '..', '..', 'so_arm101_control', 'scripts')
+        src_scripts = os.path.normpath(src_scripts)
+        installed_scripts = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
+
+        for scripts_dir in [src_scripts, installed_scripts]:
+            candidate = os.path.join(scripts_dir, 'models', model_name)
+            if os.path.isfile(os.path.join(candidate, 'best_model.zip')):
+                model_dir = candidate
+                break
+        else:
+            # Hardcoded fallback to known source location
+            model_dir = os.path.join(
+                '/home/the2xman/ASEN-5264-Project/vla_SO-ARM101/src/'
+                'so_arm101_control/scripts/models', model_name)
+
+        if not os.path.isfile(os.path.join(model_dir, 'best_model.zip')):
+            self._append_log(
+                f'Model not found: {model_dir}/best_model.zip', 'error')
+            return
+
+        self._rl_running = True
+        self._rl_pick_btn.config(state=tk.DISABLED)
+        self._rl_stop_btn.config(state=tk.NORMAL)
+        self._rl_status_var.set('Loading model...')
+
+        threading.Thread(
+            target=self._rl_policy_loop,
+            args=(model_dir, belief_mode),
+            daemon=True,
+        ).start()
+
+    def _cmd_rl_stop(self):
+        """Request RL policy loop to stop."""
+        self._rl_running = False
+        self._append_log('RL policy stop requested')
+
+    def _rl_policy_loop(self, model_dir, belief_mode):
+        """Run trained PPO policy in a control loop. Executes in background thread."""
+        import time as _time
+        try:
+            from so_arm101_control.policy_runner import PolicyRunner
+            from so_arm101_control.compute_workspace import forward_kinematics
+
+            runner = PolicyRunner(model_dir, belief_mode=belief_mode)
+            mode_str = 'Belief PPO' if belief_mode else 'Plain PPO'
+            self._append_log(f'RL: {mode_str} model loaded')
+
+            # 1. Randomize blocks
+            block_poses = runner.randomize_blocks()
+            self._rl_set_block_poses(block_poses)
+            self._append_log(f'RL: Blocks randomized')
+            _time.sleep(0.5)
+
+            # 2. Move arm to RL home (above workspace center, matching env reset)
+            from so_arm101_control.compute_workspace import geometric_ik as _geo_ik
+            rl_home_solutions = _geo_ik(0.18, 0.0, 0.06, grasp_yaw=0.0)
+            if rl_home_solutions:
+                home = rl_home_solutions[0]
+            else:
+                home = {n: 0.0 for n in ARM_JOINT_NAMES}
+                self._append_log('RL: WARNING — IK failed for home, using zeros')
+            self._send_arm_goal(home, duration_s=2.0)
+            # Real robot: max (1.745) = physically open
+            # Training env: GRIPPER_OPEN = -0.174 — conventions are INVERTED
+            self._send_gripper_goal(JOINT_LIMITS['gripper_joint'][1], duration_s=0.5)
+            self._append_log('RL: Moving to home (0.18, 0, 0.06)...')
+            _time.sleep(2.5)
+
+            # 3. Read block poses from topic and sample goal
+            with self.objects_lock:
+                obj_data = dict(self.objects_data)
+            block_true = {}
+            for name in ['red_lego_2x4', 'blue_lego_2x2']:
+                if name in obj_data:
+                    d = obj_data[name]
+                    yaw = math.atan2(
+                        2.0 * d.get('qw', 1.0) * d.get('qz', 0.0),
+                        1.0 - 2.0 * d.get('qz', 0.0)**2)
+                    block_true[name] = (d['x'], d['y'], yaw)
+                elif name in block_poses:
+                    block_true[name] = block_poses[name]
+
+            goal_xy = runner.sample_goal(block_true)
+            self._append_log(
+                f'RL: Goal at ({goal_xy[0]:.3f}, {goal_xy[1]:.3f})')
+
+            # 4. Reset episode
+            runner.reset_episode()
+            self._append_log(
+                f'RL: sigma_ep={runner.sigma_ep*1000:.1f}mm, starting policy loop')
+
+            # 5. Run policy at ~20Hz with 1.5x action speed to compensate for real motion delay
+            max_steps = 6000
+            rate_period = 0.05
+            speed_scale = 1.5
+
+            for step in range(max_steps):
+                if not self._rl_running:
+                    self._append_log('RL: Stopped by user')
+                    break
+
+                t_start = _time.time()
+
+                # Read current joint positions
+                with self.joint_lock:
+                    joints = {n: self.joint_positions[n]
+                              for n in ALL_JOINT_NAMES}
+
+                # Remap gripper angle: real robot convention is inverted from training
+                # Real: min(-0.174)=closed, max(1.745)=open
+                # Training: -0.174=open(GRIPPER_OPEN), 1.745=closed(GRIPPER_CLOSED)
+                # Flip: training_val = (max + min) - real_val
+                grip_lo, grip_hi = JOINT_LIMITS['gripper_joint']
+                real_grip = joints.get('gripper_joint', grip_hi)
+                joints['gripper_joint'] = (grip_hi + grip_lo) - real_grip
+
+                # Compute EE position via FK
+                joint_angles = [joints.get(n, 0.0) for n in ARM_JOINT_NAMES]
+                ee_pos = np.array(forward_kinematics(joint_angles))
+
+                # Read latest block poses
+                with self.objects_lock:
+                    obj_data = dict(self.objects_data)
+                for name in ['red_lego_2x4', 'blue_lego_2x2']:
+                    if name in obj_data:
+                        d = obj_data[name]
+                        yaw = math.atan2(
+                            2.0 * d.get('qw', 1.0) * d.get('qz', 0.0),
+                            1.0 - 2.0 * d.get('qz', 0.0)**2)
+                        block_true[name] = (d['x'], d['y'], yaw)
+
+                # Build observation and get action
+                obs = runner.build_observation(
+                    joints, block_true, ee_pos, goal_xy,
+                    runner.holding_block)
+                action = runner.predict(obs)
+                dx, dy, dz, gripper_cmd = action
+
+                # Update GUI status
+                status = (f'Step {step}: '
+                          f'dx={dx:.3f} dy={dy:.3f} dz={dz:.3f} '
+                          f'g={gripper_cmd:.1f} '
+                          f'{"HOLDING" if runner.holding_block else ""}')
+                self.root.after(0, self._rl_status_var.set, status)
+
+                # Send arm trajectory (3x speed to compensate for real motion delay)
+                new_joints = runner.ik_step(ee_pos, action, speed_scale=speed_scale)
+                if new_joints is not None:
+                    self._send_arm_goal(new_joints, duration_s=0.08)
+
+                # Handle gripper transitions
+                want_close = gripper_cmd > 0.0
+
+                # Gripper convention is INVERTED between training and real robot:
+                #   Training: GRIPPER_CLOSED=1.745 (max), GRIPPER_OPEN=-0.174 (min)
+                #   Real bot: min=-0.174 = physically closed, max=1.745 = physically open
+                if want_close and not runner.gripper_closed:
+                    runner.gripper_closed = True
+                    # Physically close = send MIN value
+                    self._send_gripper_goal(
+                        JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
+                    target = block_true.get('red_lego_2x4')
+                    if target:
+                        gdist = np.linalg.norm(ee_pos[:2] - np.array([target[0], target[1]]))
+                    else:
+                        gdist = float('inf')
+                    success = runner.check_grasp(ee_pos, block_true)
+                    if success:
+                        self._append_log(f'RL: Grasp SUCCESS at step {step}! dist={gdist*1000:.1f}mm')
+                    else:
+                        self._append_log(f'RL: Grasp failed at step {step}, dist={gdist*1000:.1f}mm')
+
+                elif not want_close and runner.gripper_closed:
+                    runner.gripper_closed = False
+                    # Physically open = send MAX value
+                    self._send_gripper_goal(
+                        JOINT_LIMITS['gripper_joint'][1], duration_s=0.3)
+
+                    if runner.holding_block:
+                        runner.holding_block = False
+                        dist = np.linalg.norm(ee_pos[:2] - goal_xy)
+                        if dist < 0.04:
+                            self._append_log(
+                                f'RL: Placement SUCCESS! '
+                                f'dist={dist*1000:.1f}mm at step {step}')
+                            break
+                        else:
+                            self._append_log(
+                                f'RL: Dropped block, dist={dist*1000:.1f}mm '
+                                f'(>{40}mm)')
+
+                # Move held block with EE
+                if runner.holding_block:
+                    self._rl_move_block_to_ee('red_lego_2x4', ee_pos)
+
+                # Rate limit
+                elapsed = _time.time() - t_start
+                if elapsed < rate_period:
+                    _time.sleep(rate_period - elapsed)
+            else:
+                self._append_log(f'RL: Timeout after {max_steps} steps')
+
+        except Exception as e:
+            self._append_log(f'RL error: {e}', 'error')
+            import traceback
+            traceback.print_exc()
+        finally:
+            self._rl_running = False
+            self.root.after(0, self._rl_pick_btn.config, {'state': tk.NORMAL})
+            self.root.after(0, self._rl_stop_btn.config, {'state': tk.DISABLED})
+            self.root.after(0, self._rl_status_var.set, 'Idle')
+
+    def _rl_set_block_poses(self, block_poses):
+        """Publish block positions to /mujoco/set_body_pose."""
+        for name, (x, y, yaw) in block_poses.items():
+            msg = PoseStamped()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = name
+            msg.pose.position.x = float(x)
+            msg.pose.position.y = float(y)
+            msg.pose.position.z = 0.0055  # TABLE_Z
+            # Convert yaw to quaternion
+            msg.pose.orientation.x = 0.0
+            msg.pose.orientation.y = 0.0
+            msg.pose.orientation.z = float(math.sin(yaw / 2))
+            msg.pose.orientation.w = float(math.cos(yaw / 2))
+            self._set_body_pose_pub.publish(msg)
+
+    def _rl_move_block_to_ee(self, block_name, ee_pos):
+        """Move a block to follow the EE position."""
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = block_name
+        msg.pose.position.x = float(ee_pos[0])
+        msg.pose.position.y = float(ee_pos[1])
+        msg.pose.position.z = max(0.0055, float(ee_pos[2]))
+        msg.pose.orientation.w = 1.0
+        self._set_body_pose_pub.publish(msg)
 
     def _cmd_check_grasp_reachable(self):
         """Check if the selected object is within the top-down grasp workspace."""

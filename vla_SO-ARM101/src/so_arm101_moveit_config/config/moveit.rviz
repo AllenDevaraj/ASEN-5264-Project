@@ -49,6 +49,15 @@ Visualization Manager:
         Show Robot Collision: false
         Show Robot Visual: true
       Value: true
+    - Class: rviz_default_plugins/Image
+      Name: Wrist Camera
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /wrist_camera
+      Value: true
   Global Options:
     Fixed Frame: base
   Tools:

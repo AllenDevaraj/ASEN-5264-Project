@@ -300,6 +300,9 @@ Tracks every training run, reward change, and fix for the final report.
 | 2026-03-16 | Added goal_xy, ee_pos, holding to obs (12D→18D) | `79ec028` | Agent can now see the goal and its own EE position |
 | 2026-03-16 | Gripper exploration reward + ent_coef 0.01→0.05 | `9e71be2` | Direct gradient for gripper close near block |
 | 2026-03-16 | Transition-based gripper reward (fix exploit) | — | Gripper reward only on open→close transition, distance-dependent outcomes |
+| 2026-03-17 | Stronger carry shaping + tiered placement rewards | — | Carry shaping 3→5, placement +50/+30/+10, miss penalty -10 |
+| 2026-03-17 | ROS2 policy integration: policy_runner.py + GUI button | — | "Pick (RL)" button in GUI runs trained PPO through ROS2 control stack |
+| 2026-03-17 | Block pose publisher in mujoco_sim.py | — | Publishes mocap body positions to /objects_poses_sim at 10Hz |
 
 ## Dependencies Installed
 
