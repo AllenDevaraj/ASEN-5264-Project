@@ -149,6 +149,17 @@ def merge_urdf_into_scene(urdf_xml, scene_file):
         for body in robot_worldbody:
             scene_worldbody.append(body)
 
+    # Enable collision on robot geoms EXCEPT gripper/jaw (whose convex hulls
+    # fill the space between jaws, making it impossible to grasp blocks).
+    # Grasping is probabilistic (matching training), not physics-based.
+    _no_collision_bodies = {'red_lego_2x4', 'green_lego_2x3', 'blue_lego_2x2',
+                            'gripper', 'jaw', 'tcp_link'}
+    for body in scene_worldbody.iter('body'):
+        if body.get('name', '') not in _no_collision_bodies:
+            for geom in body.findall('geom'):
+                geom.set('contype', '1')
+                geom.set('conaffinity', '1')
+
     # Merge actuators
     scene_actuator = scene_root.find('actuator')
     robot_actuator = robot_root.find('actuator')
@@ -193,7 +204,7 @@ class MujocoSimNode(Node):
         self.declare_parameter('camera_height', 720)
         self.declare_parameter('camera_hfov', 1.7453)  # 100 degrees in radians
         self.declare_parameter('camera_fps', 30.0)
-        self.declare_parameter('physics_rate', 1000.0)
+        self.declare_parameter('physics_rate', 2000.0)
 
         scene_file = self.get_parameter('scene_file').value
         self.headless = self.get_parameter('headless').value
@@ -243,11 +254,15 @@ class MujocoSimNode(Node):
 
         # Build joint name -> qpos index mapping
         self.joint_map = {}
+        self._robot_qpos_indices = []  # indices to preserve during mj_step
+        self._robot_qvel_indices = []
         for name in self.JOINT_NAMES:
             jnt_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
             if jnt_id >= 0:
                 qpos_adr = self.model.jnt_qposadr[jnt_id]
                 self.joint_map[name] = qpos_adr
+                self._robot_qpos_indices.append(qpos_adr)
+                self._robot_qvel_indices.append(self.model.jnt_dofadr[jnt_id])
                 self.get_logger().info(f'  Joint {name}: id={jnt_id}, qpos_adr={qpos_adr}')
             else:
                 self.get_logger().warn(f'  Joint {name}: NOT FOUND in MuJoCo model')
@@ -351,9 +366,10 @@ class MujocoSimNode(Node):
                     throttle_duration_sec=1.0)
 
     def _set_body_pose_cb(self, msg):
-        """Reposition a mocap body via /mujoco/set_body_pose.
+        """Reposition a free body via /mujoco/set_body_pose.
 
-        Body name is in header.frame_id.
+        Body name is in header.frame_id. Sets qpos for the body's freejoint.
+        Falls back to mocap if the body is a mocap body (backwards compat).
         """
         body_name = msg.header.frame_id
         body_id = mujoco.mj_name2id(
@@ -362,21 +378,34 @@ class MujocoSimNode(Node):
             self.get_logger().warn(f'Body "{body_name}" not found in MuJoCo model')
             return
 
-        # Find mocap body index
-        mocap_id = self.model.body_mocapid[body_id]
-        if mocap_id < 0:
-            self.get_logger().warn(f'Body "{body_name}" is not a mocap body')
-            return
-
         p = msg.pose.position
         q = msg.pose.orientation
 
         with self._lock:
-            self.data.mocap_pos[mocap_id] = [p.x, p.y, p.z]
-            self.data.mocap_quat[mocap_id] = [q.w, q.x, q.y, q.z]
+            # Try freejoint first (free bodies have 7 qpos: x,y,z,qw,qx,qy,qz)
+            jnt_id = self.model.body_jntadr[body_id]
+            if jnt_id >= 0 and self.model.jnt_type[jnt_id] == mujoco.mjtJoint.mjJNT_FREE:
+                qadr = self.model.jnt_qposadr[jnt_id]
+                self.data.qpos[qadr:qadr+3] = [p.x, p.y, p.z]
+                self.data.qpos[qadr+3:qadr+7] = [q.w, q.x, q.y, q.z]
+                # Zero velocity so block doesn't fly away
+                vadr = self.model.jnt_dofadr[jnt_id]
+                self.data.qvel[vadr:vadr+6] = 0.0
+            else:
+                # Fallback to mocap
+                mocap_id = self.model.body_mocapid[body_id]
+                if mocap_id >= 0:
+                    self.data.mocap_pos[mocap_id] = [p.x, p.y, p.z]
+                    self.data.mocap_quat[mocap_id] = [q.w, q.x, q.y, q.z]
+                else:
+                    self.get_logger().warn(
+                        f'Body "{body_name}" has no freejoint or mocap')
 
     def _publish_block_poses(self):
-        """Publish mocap body positions as TFMessage on /objects_poses_sim."""
+        """Publish block body positions as TFMessage on /objects_poses_sim.
+
+        Reads from freejoint qpos (pos + quat) or falls back to mocap.
+        """
         msg = TFMessage()
         with self._lock:
             for name in self._block_names:
@@ -384,12 +413,20 @@ class MujocoSimNode(Node):
                     self.model, mujoco.mjtObj.mjOBJ_BODY, name)
                 if body_id < 0:
                     continue
-                mocap_id = self.model.body_mocapid[body_id]
-                if mocap_id < 0:
-                    continue
 
-                pos = self.data.mocap_pos[mocap_id].copy()
-                quat = self.data.mocap_quat[mocap_id].copy()  # [w, x, y, z]
+                # Try freejoint qpos first
+                jnt_id = self.model.body_jntadr[body_id]
+                if jnt_id >= 0 and self.model.jnt_type[jnt_id] == mujoco.mjtJoint.mjJNT_FREE:
+                    qadr = self.model.jnt_qposadr[jnt_id]
+                    pos = self.data.qpos[qadr:qadr+3].copy()
+                    quat = self.data.qpos[qadr+3:qadr+7].copy()  # [w, x, y, z]
+                else:
+                    # Fallback to mocap
+                    mocap_id = self.model.body_mocapid[body_id]
+                    if mocap_id < 0:
+                        continue
+                    pos = self.data.mocap_pos[mocap_id].copy()
+                    quat = self.data.mocap_quat[mocap_id].copy()
 
                 tf = TransformStamped()
                 tf.header.stamp = self.get_clock().now().to_msg()
@@ -408,16 +445,27 @@ class MujocoSimNode(Node):
             self.objects_pub.publish(msg)
 
     def _physics_step(self):
-        """Update MuJoCo kinematics and publish /clock.
+        """Step MuJoCo physics and publish /clock.
 
-        Uses mj_forward() instead of mj_step() because we mirror joint
-        positions from ros2_control mock hardware. mj_step() would run
-        physics that overwrites our qpos; mj_forward() just computes
-        kinematics/rendering from the current qpos.
+        Uses mj_step() for full physics (collision, contact forces) so free
+        bodies (lego blocks) respond to robot contact. Robot joint positions
+        are saved before the step and restored after, since they are driven
+        by ros2_control (not MuJoCo actuators).
         """
         with self._lock:
-            mujoco.mj_forward(self.model, self.data)
-            self.data.time += self.model.opt.timestep
+            # Save robot joint positions (driven by ros2_control)
+            saved_qpos = [self.data.qpos[i] for i in self._robot_qpos_indices]
+            saved_qvel = [self.data.qvel[i] for i in self._robot_qvel_indices]
+
+            # Full physics step — blocks react to contact
+            mujoco.mj_step(self.model, self.data)
+
+            # Restore robot joints (they're kinematically driven, not simulated)
+            for i, idx in enumerate(self._robot_qpos_indices):
+                self.data.qpos[idx] = saved_qpos[i]
+            for i, idx in enumerate(self._robot_qvel_indices):
+                self.data.qvel[idx] = saved_qvel[i]
+
             sim_time = self.data.time
 
         # Publish clock

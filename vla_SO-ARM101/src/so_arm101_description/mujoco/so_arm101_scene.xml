@@ -1,6 +1,8 @@
 <mujoco model="so_arm101_scene">
-  <!-- Physics settings matching Gazebo SDF (timestep=0.001s) -->
-  <option timestep="0.001" gravity="0 0 -9.81" integrator="implicit"/>
+  <!-- Physics settings: small timestep for stable contact with tiny blocks -->
+  <option timestep="0.0005" gravity="0 0 -9.81" integrator="implicit"
+          noslip_iterations="3"/>
+  <size nconmax="200" njmax="200"/>
 
   <compiler angle="radian" meshdir="../meshes/"/>
 
@@ -37,32 +39,39 @@
 
     <!--
       LEGO bricks on the ground plane in front of the SO-ARM101.
-      Using mocap bodies so they can be repositioned at runtime via /mujoco/set_body_pose.
+      Free bodies with collision — can be pushed, tipped, and grasped.
+      Repositioned at runtime via /mujoco/set_body_pose (writes qpos).
       Ground truth positions (world frame):
         red_lego_2x4:   (0.18,  0.03, 0.0055) yaw=0.8   size=32x16x11mm
         green_lego_2x3: (0.20,  0.06, 0.0055) yaw=-0.4  size=24x16x11mm
         blue_lego_2x2:  (0.22,  0.03, 0.0055) yaw=0.0   size=16x16x11mm
     -->
 
-    <!-- Red lego 2x4: 32x16x11mm -->
-    <body name="red_lego_2x4" mocap="true"
+    <!-- Red lego 2x4: 32x16x11mm (mass inflated for stable contact) -->
+    <body name="red_lego_2x4"
           pos="0.18 0.03 0.0055" quat="0.9211 0 0 0.3894">
+      <freejoint name="red_lego_2x4_jnt"/>
       <geom type="box" size="0.016 0.008 0.0055"
-            material="red_lego" contype="1" conaffinity="1" mass="0.005"/>
+            material="red_lego" contype="1" conaffinity="1" mass="0.05"
+            friction="1.0 0.5 0.001" solref="0.01 1" solimp="0.9 0.95 0.001"/>
     </body>
 
     <!-- Green lego 2x3: 24x16x11mm -->
-    <body name="green_lego_2x3" mocap="true"
+    <body name="green_lego_2x3"
           pos="0.20 0.06 0.0055" quat="0.9801 0 0 -0.1987">
+      <freejoint name="green_lego_2x3_jnt"/>
       <geom type="box" size="0.012 0.008 0.0055"
-            material="green_lego" contype="1" conaffinity="1" mass="0.005"/>
+            material="green_lego" contype="1" conaffinity="1" mass="0.05"
+            friction="1.0 0.5 0.001" solref="0.01 1" solimp="0.9 0.95 0.001"/>
     </body>
 
     <!-- Blue lego 2x2: 16x16x11mm -->
-    <body name="blue_lego_2x2" mocap="true"
+    <body name="blue_lego_2x2"
           pos="0.22 0.03 0.0055" quat="1 0 0 0">
+      <freejoint name="blue_lego_2x2_jnt"/>
       <geom type="box" size="0.008 0.008 0.0055"
-            material="blue_lego" contype="1" conaffinity="1" mass="0.005"/>
+            material="blue_lego" contype="1" conaffinity="1" mass="0.05"
+            friction="1.0 0.5 0.001" solref="0.01 1" solimp="0.9 0.95 0.001"/>
     </body>
 
     <!-- Wrist camera definition (specs: hfov=100deg=1.7453rad, 1280x720) -->

@@ -291,9 +291,8 @@ class PolicyRunner:
         ee_xy = ee_pos[:2]
         dist = np.linalg.norm(ee_xy - block_xy)
 
-        # ROS mode: more forgiving than training (0.02 center vs 0.01)
-        # to compensate for motion lag and observation delay
-        p_grasp = 1.0 / (1.0 + math.exp(-200.0 * (0.02 - dist)))
+        # Match training: sigmoid centered at 10mm, steep slope
+        p_grasp = 1.0 / (1.0 + math.exp(-300.0 * (0.01 - dist)))
         if self.rng.random() < p_grasp:
             self.holding_block = True
             return True
