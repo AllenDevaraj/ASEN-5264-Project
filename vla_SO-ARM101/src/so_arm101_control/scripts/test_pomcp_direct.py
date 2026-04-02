@@ -225,6 +225,28 @@ def test_direct_planner_one_episode():
     print(f"  PASS: 1 episode completed in {steps} steps, reward={total_reward:.1f}")
 
 
+def test_evaluate_direct_runs():
+    """Test 6: evaluate_pomcp_direct runs 3 episodes without crashing."""
+    sys.path.insert(0, '/home/the2xman/ASEN-5264-Project/vla_SO-ARM101/src/so_arm101_control/scripts')
+    from train_pomcp import evaluate_pomcp_direct
+
+    results = evaluate_pomcp_direct(
+        n_episodes=3,
+        n_rollouts=5,
+        n_workers=2,
+        gamma=0.99,
+        seed=42,
+    )
+
+    assert "success_rate" in results, "Missing success_rate"
+    assert "mean_episode_length" in results, "Missing mean_episode_length"
+    assert "mean_return" in results, "Missing mean_return"
+    assert 0.0 <= results["success_rate"] <= 1.0, "success_rate out of range"
+
+    print(f"  PASS: evaluate_direct — {results['success_rate']*100:.0f}% success, "
+          f"mean_len={results['mean_episode_length']:.1f}")
+
+
 if __name__ == "__main__":
     tests = [
         ("serialize/restore roundtrip", test_serialize_restore_roundtrip),
@@ -232,6 +254,7 @@ if __name__ == "__main__":
         ("heuristic phases", test_heuristic_phases),
         ("direct planner valid action", test_direct_planner_returns_valid_action),
         ("direct planner one episode", test_direct_planner_one_episode),
+        ("evaluate_pomcp_direct runs", test_evaluate_direct_runs),
     ]
     passed = 0
     for name, fn in tests:

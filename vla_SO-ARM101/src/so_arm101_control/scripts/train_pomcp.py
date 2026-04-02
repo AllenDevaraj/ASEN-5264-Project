@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 
 from so_arm101_control.lego_pick_env import LegoPickEnv
+from so_arm101_control.pomcp_env_bridge import serialize_state
 
 
 # --- Discrete action mapping for tree search ---
@@ -380,6 +381,110 @@ class DirectPOMCPPlanner:
                 p.terminate()
 
 
+def evaluate_pomcp_direct(n_episodes=100, n_rollouts=100, n_workers=8,
+                          gamma=0.99, seed=0):
+    """Evaluate POMCP Direct Simulator planner.
+
+    Args:
+        n_episodes: Number of evaluation episodes.
+        n_rollouts: Rollouts per action per planning step.
+        n_workers: Number of parallel worker processes.
+        gamma: Discount factor.
+        seed: Random seed for episode reset.
+
+    Returns:
+        dict with evaluation metrics.
+    """
+    import json
+    import time
+
+    env = LegoPickEnv(belief_mode=True)
+    planner = DirectPOMCPPlanner(
+        n_rollouts=n_rollouts, n_workers=n_workers, gamma=gamma
+    )
+
+    successes = 0
+    perfect = 0
+    precise = 0
+    close = 0
+    episode_lengths = []
+    episode_returns = []
+    planning_times = []
+
+    for ep in range(n_episodes):
+        obs, info = env.reset(seed=seed + ep)
+        done = False
+        total_return = 0.0
+        steps = 0
+
+        while not done:
+            step_start = time.time()
+            snapshot = serialize_state(env)
+            action_idx = planner.plan(snapshot)
+            planning_times.append(time.time() - step_start)
+
+            action = DISCRETE_ACTIONS[action_idx]
+            obs, reward, terminated, truncated, info = env.step(action)
+            total_return += reward
+            steps += 1
+            done = terminated or truncated
+
+        episode_lengths.append(steps)
+        episode_returns.append(total_return)
+
+        if info.get("success", False):
+            successes += 1
+            dist = info.get("dist_to_goal", 1.0)
+            if dist < 0.01:
+                perfect += 1
+            elif dist < 0.02:
+                precise += 1
+            elif dist < 0.04:
+                close += 1
+
+        if (ep + 1) % 10 == 0 or (ep + 1) == n_episodes:
+            print(f"  Episode {ep+1}/{n_episodes}: "
+                  f"success={successes}/{ep+1} ({successes/(ep+1)*100:.1f}%), "
+                  f"avg_steps={np.mean(episode_lengths):.1f}, "
+                  f"avg_plan_time={np.mean(planning_times):.1f}s")
+
+    planner.close()
+    env.close()
+
+    results = {
+        "success_rate": successes / n_episodes,
+        "perfect_rate": perfect / n_episodes,
+        "precise_rate": precise / n_episodes,
+        "close_rate": close / n_episodes,
+        "mean_episode_length": float(np.mean(episode_lengths)),
+        "mean_return": float(np.mean(episode_returns)),
+        "std_return": float(np.std(episode_returns)),
+        "mean_planning_time_s": float(np.mean(planning_times)),
+        "n_episodes": n_episodes,
+        "n_rollouts": n_rollouts,
+        "n_workers": n_workers,
+    }
+
+    # Save results
+    out_dir = os.path.join(os.path.dirname(__file__), "logs", "pomcp_direct")
+    os.makedirs(out_dir, exist_ok=True)
+    results_path = os.path.join(out_dir, "eval_results.json")
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\nResults saved to {results_path}")
+
+    print(f"\nPOMCP Direct Results ({n_episodes} episodes):")
+    print(f"  Success rate:     {results['success_rate']*100:.1f}%")
+    print(f"  Perfect (<10mm):  {results['perfect_rate']*100:.1f}%")
+    print(f"  Precise (<20mm):  {results['precise_rate']*100:.1f}%")
+    print(f"  Close   (<40mm):  {results['close_rate']*100:.1f}%")
+    print(f"  Mean steps:       {results['mean_episode_length']:.1f}")
+    print(f"  Mean return:      {results['mean_return']:.1f} ± {results['std_return']:.1f}")
+    print(f"  Mean plan time:   {results['mean_planning_time_s']:.1f}s/step")
+
+    return results
+
+
 def evaluate_pomcp(world_model_path, n_episodes=100, n_rollouts=500):
     """Evaluate POMCP planner on the environment."""
     from so_arm101_control.world_model import WorldModel
@@ -434,52 +539,61 @@ def main():
     parser.add_argument("--collect", action="store_true",
                         help="Collect transitions and train world model")
     parser.add_argument("--evaluate", action="store_true",
-                        help="Evaluate POMCP planner")
+                        help="Evaluate POMCP planner (learned world model)")
+    parser.add_argument("--direct", action="store_true",
+                        help="Evaluate POMCP planner (direct simulator)")
     parser.add_argument("--belief-model", type=str,
                         default="models/ppo_belief/best_model")
     parser.add_argument("--world-model", type=str,
                         default="models/pomcp/world_model.pt")
     parser.add_argument("--n-transitions", type=int, default=50000)
     parser.add_argument("--n-episodes", type=int, default=100)
-    parser.add_argument("--n-rollouts", type=int, default=500)
+    parser.add_argument("--n-rollouts", type=int, default=100)
+    parser.add_argument("--n-workers", type=int, default=8)
+    parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", type=str, default="./models/pomcp")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
     if args.collect:
-        # Step 1: Collect transitions
         print("Step 1: Collecting transitions from Belief PPO...")
         transitions = collect_transitions(
             args.belief_model, n_transitions=args.n_transitions
         )
-
-        # Save transitions
         trans_path = os.path.join(args.output_dir, "transitions.npz")
         np.savez(trans_path, **transitions)
         print(f"Transitions saved to {trans_path}")
 
-        # Step 2: Train world model
         print("\nStep 2: Training world model...")
         from so_arm101_control.world_model import WorldModel
-
         wm = WorldModel()
         wm.train_on_buffer(transitions, epochs=args.epochs)
         wm.save(os.path.join(args.output_dir, "world_model.pt"))
         print(f"World model saved to {args.output_dir}/world_model.pt")
 
     if args.evaluate:
-        # Step 3: Evaluate POMCP
-        print("Step 3: Evaluating POMCP planner...")
+        print("Evaluating POMCP planner (learned world model)...")
         evaluate_pomcp(
             args.world_model,
             n_episodes=args.n_episodes,
             n_rollouts=args.n_rollouts,
         )
 
-    if not args.collect and not args.evaluate:
-        print("Specify --collect and/or --evaluate. See --help.")
+    if args.direct:
+        print("Evaluating POMCP planner (direct simulator)...")
+        evaluate_pomcp_direct(
+            n_episodes=args.n_episodes,
+            n_rollouts=args.n_rollouts,
+            n_workers=args.n_workers,
+            gamma=args.gamma,
+            seed=args.seed,
+        )
+
+    if not args.collect and not args.evaluate and not args.direct:
+        print("Specify --collect, --evaluate, and/or --direct. See --help.")
 
 
 if __name__ == "__main__":
