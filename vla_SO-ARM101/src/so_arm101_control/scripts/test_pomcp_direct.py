@@ -103,10 +103,78 @@ def test_restore_produces_same_trajectory():
     print("  PASS: same snapshot → similar trajectories")
 
 
+def test_heuristic_phases():
+    """Test 3: Heuristic selects correct action for each task phase."""
+    from so_arm101_control.pomcp_heuristic import heuristic_action
+
+    # Phase 1: block is far in +X → should move +X (action 0)
+    action = heuristic_action(
+        ee_pos=np.array([0.10, 0.0, 0.06]),
+        block_mu=np.array([0.20, 0.0, 0.0]),
+        goal_xy=np.array([0.15, 0.05]),
+        holding=False,
+        gripper_closed=False,
+    )
+    assert action == 0, f"Expected +X (0), got {action}"
+
+    # Phase 1: block is far in -Y → should move -Y (action 3)
+    action = heuristic_action(
+        ee_pos=np.array([0.15, 0.05, 0.06]),
+        block_mu=np.array([0.15, -0.05, 0.0]),
+        goal_xy=np.array([0.18, 0.0]),
+        holding=False,
+        gripper_closed=False,
+    )
+    assert action == 3, f"Expected -Y (3), got {action}"
+
+    # Phase 2: close in XY, high in Z → should LOWER (action 4)
+    action = heuristic_action(
+        ee_pos=np.array([0.15, 0.0, 0.05]),
+        block_mu=np.array([0.15, 0.0, 0.0]),
+        goal_xy=np.array([0.18, 0.0]),
+        holding=False,
+        gripper_closed=False,
+    )
+    assert action == 4, f"Expected LOWER (4), got {action}"
+
+    # Phase 3: close in XY, low in Z → should CLOSE (action 6)
+    action = heuristic_action(
+        ee_pos=np.array([0.15, 0.0, 0.010]),
+        block_mu=np.array([0.15, 0.0, 0.0]),
+        goal_xy=np.array([0.18, 0.0]),
+        holding=False,
+        gripper_closed=False,
+    )
+    assert action == 6, f"Expected CLOSE (6), got {action}"
+
+    # Phase 4: holding, goal in +X → should move +X (action 0)
+    action = heuristic_action(
+        ee_pos=np.array([0.10, 0.0, 0.02]),
+        block_mu=np.array([0.10, 0.0, 0.0]),
+        goal_xy=np.array([0.18, 0.0]),
+        holding=True,
+        gripper_closed=True,
+    )
+    assert action == 0, f"Expected +X (0), got {action}"
+
+    # Phase 5: holding, at goal → should OPEN (action 7)
+    action = heuristic_action(
+        ee_pos=np.array([0.18, 0.0, 0.02]),
+        block_mu=np.array([0.18, 0.0, 0.0]),
+        goal_xy=np.array([0.18, 0.0]),
+        holding=True,
+        gripper_closed=True,
+    )
+    assert action == 7, f"Expected OPEN (7), got {action}"
+
+    print("  PASS: heuristic phases")
+
+
 if __name__ == "__main__":
     tests = [
         ("serialize/restore roundtrip", test_serialize_restore_roundtrip),
         ("restore same trajectory", test_restore_produces_same_trajectory),
+        ("heuristic phases", test_heuristic_phases),
     ]
     passed = 0
     for name, fn in tests:
