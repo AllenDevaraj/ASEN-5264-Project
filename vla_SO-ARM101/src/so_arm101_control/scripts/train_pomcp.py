@@ -268,45 +268,51 @@ def _worker_loop(task_queue, result_queue, belief_mode):
             break
 
         snapshot, action_idx, n_rollouts, gamma = msg
-        returns = []
 
-        for _ in range(n_rollouts):
-            restore_state(env, snapshot)
+        try:
+            returns = []
 
-            # First step: execute the assigned action
-            action = DISCRETE_ACTIONS[action_idx]
-            obs, reward, terminated, truncated, info = env.step(action)
-            total_return = reward
-            discount = gamma
+            for _ in range(n_rollouts):
+                restore_state(env, snapshot)
 
-            # Continue with heuristic policy
-            while not (terminated or truncated):
-                # Extract state for heuristic
-                if env.belief_mode:
-                    mu, _ = env.pf.get_belief()
-                    block_mu = mu[0]
-                else:
-                    block_mu = np.array([
-                        env._block_true_poses["red_lego_2x4"][0],
-                        env._block_true_poses["red_lego_2x4"][1],
-                        env._block_true_poses["red_lego_2x4"][2],
-                    ])
-
-                h_action_idx = heuristic_action(
-                    ee_pos=env._ee_pos,
-                    block_mu=block_mu,
-                    goal_xy=env._goal_pos,
-                    holding=env._holding_block,
-                    gripper_closed=env._gripper_closed,
-                )
-                action = DISCRETE_ACTIONS[h_action_idx]
+                # First step: execute the assigned action
+                action = DISCRETE_ACTIONS[action_idx]
                 obs, reward, terminated, truncated, info = env.step(action)
-                total_return += discount * reward
-                discount *= gamma
+                total_return = reward
+                discount = gamma
 
-            returns.append(total_return)
+                # Continue with heuristic policy
+                while not (terminated or truncated):
+                    # Extract state for heuristic
+                    if env.belief_mode:
+                        mu, _ = env.pf.get_belief()
+                        block_mu = mu[0]
+                    else:
+                        block_mu = np.array([
+                            env._block_true_poses["red_lego_2x4"][0],
+                            env._block_true_poses["red_lego_2x4"][1],
+                            env._block_true_poses["red_lego_2x4"][2],
+                        ])
 
-        result_queue.put((action_idx, float(np.mean(returns))))
+                    h_action_idx = heuristic_action(
+                        ee_pos=env._ee_pos,
+                        block_mu=block_mu,
+                        goal_xy=env._goal_pos,
+                        holding=env._holding_block,
+                        gripper_closed=env._gripper_closed,
+                    )
+                    action = DISCRETE_ACTIONS[h_action_idx]
+                    obs, reward, terminated, truncated, info = env.step(action)
+                    total_return += discount * reward
+                    discount *= gamma
+
+                returns.append(total_return)
+
+            result_queue.put((action_idx, float(np.mean(returns))))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            result_queue.put((action_idx, float('-inf')))
 
     env.close()
 
@@ -352,9 +358,13 @@ class DirectPOMCPPlanner:
                 )
                 tasks_sent += 1
 
+        import queue
         q_values = {a: [] for a in range(self.n_actions)}
         for _ in range(tasks_sent):
-            action_idx, mean_return = self._result_queue.get()
+            try:
+                action_idx, mean_return = self._result_queue.get(timeout=300)
+            except queue.Empty:
+                raise RuntimeError("Worker timeout — a rollout took >5min")
             q_values[action_idx].append(mean_return)
 
         q_means = {a: np.mean(vs) for a, vs in q_values.items()}
