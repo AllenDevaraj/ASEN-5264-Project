@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import math
+import multiprocessing as mp
 import os
 import sys
 
@@ -242,6 +243,131 @@ class POMCPPlanner:
             discount *= self.gamma
 
         return total_return
+
+
+# --- Direct Simulator POMCP ---
+
+
+def _worker_loop(task_queue, result_queue, belief_mode):
+    """Persistent worker process: owns one env, runs rollouts on demand.
+
+    Receives: (snapshot, action_idx, n_rollouts, gamma)
+    Sends:    (action_idx, mean_return)
+    Sentinel: None on task_queue means shutdown.
+    """
+    from so_arm101_control.lego_pick_env import LegoPickEnv
+    from so_arm101_control.pomcp_env_bridge import restore_state
+    from so_arm101_control.pomcp_heuristic import heuristic_action
+
+    env = LegoPickEnv(belief_mode=belief_mode)
+    env.reset(seed=0)
+
+    while True:
+        msg = task_queue.get()
+        if msg is None:
+            break
+
+        snapshot, action_idx, n_rollouts, gamma = msg
+        returns = []
+
+        for _ in range(n_rollouts):
+            restore_state(env, snapshot)
+
+            # First step: execute the assigned action
+            action = DISCRETE_ACTIONS[action_idx]
+            obs, reward, terminated, truncated, info = env.step(action)
+            total_return = reward
+            discount = gamma
+
+            # Continue with heuristic policy
+            while not (terminated or truncated):
+                # Extract state for heuristic
+                if env.belief_mode:
+                    mu, _ = env.pf.get_belief()
+                    block_mu = mu[0]
+                else:
+                    block_mu = np.array([
+                        env._block_true_poses["red_lego_2x4"][0],
+                        env._block_true_poses["red_lego_2x4"][1],
+                        env._block_true_poses["red_lego_2x4"][2],
+                    ])
+
+                h_action_idx = heuristic_action(
+                    ee_pos=env._ee_pos,
+                    block_mu=block_mu,
+                    goal_xy=env._goal_pos,
+                    holding=env._holding_block,
+                    gripper_closed=env._gripper_closed,
+                )
+                action = DISCRETE_ACTIONS[h_action_idx]
+                obs, reward, terminated, truncated, info = env.step(action)
+                total_return += discount * reward
+                discount *= gamma
+
+            returns.append(total_return)
+
+        result_queue.put((action_idx, float(np.mean(returns))))
+
+    env.close()
+
+
+class DirectPOMCPPlanner:
+    """POMCP planner using real MuJoCo env for rollouts."""
+
+    def __init__(self, n_rollouts=100, n_workers=8, gamma=0.99, belief_mode=True):
+        self.n_rollouts = n_rollouts
+        self.n_workers = n_workers
+        self.gamma = gamma
+        self.n_actions = len(DISCRETE_ACTIONS)
+
+        self._task_queues = []
+        self._result_queue = mp.Queue()
+        self._workers = []
+
+        for _ in range(n_workers):
+            tq = mp.Queue()
+            p = mp.Process(target=_worker_loop,
+                           args=(tq, self._result_queue, belief_mode),
+                           daemon=True)
+            p.start()
+            self._task_queues.append(tq)
+            self._workers.append(p)
+
+    def plan(self, snapshot):
+        """Run parallel rollouts for all 8 actions and return best.
+
+        Args:
+            snapshot: dict from serialize_state(env).
+
+        Returns:
+            int: best action index (0-7).
+        """
+        rollouts_per_worker = max(1, self.n_rollouts // self.n_workers)
+        tasks_sent = 0
+
+        for action_idx in range(self.n_actions):
+            for w in range(self.n_workers):
+                self._task_queues[w].put(
+                    (snapshot, action_idx, rollouts_per_worker, self.gamma)
+                )
+                tasks_sent += 1
+
+        q_values = {a: [] for a in range(self.n_actions)}
+        for _ in range(tasks_sent):
+            action_idx, mean_return = self._result_queue.get()
+            q_values[action_idx].append(mean_return)
+
+        q_means = {a: np.mean(vs) for a, vs in q_values.items()}
+        return max(q_means, key=q_means.get)
+
+    def close(self):
+        """Shutdown all worker processes."""
+        for tq in self._task_queues:
+            tq.put(None)
+        for p in self._workers:
+            p.join(timeout=10)
+            if p.is_alive():
+                p.terminate()
 
 
 def evaluate_pomcp(world_model_path, n_episodes=100, n_rollouts=500):

@@ -170,11 +170,68 @@ def test_heuristic_phases():
     print("  PASS: heuristic phases")
 
 
+def test_direct_planner_returns_valid_action():
+    """Test 4: DirectPOMCPPlanner.plan() returns action 0-7 and runs without error."""
+    from so_arm101_control.lego_pick_env import LegoPickEnv
+    from so_arm101_control.pomcp_env_bridge import serialize_state
+
+    sys.path.insert(0, '/home/the2xman/ASEN-5264-Project/vla_SO-ARM101/src/so_arm101_control/scripts')
+    from train_pomcp import DirectPOMCPPlanner
+
+    env = LegoPickEnv(belief_mode=True)
+    env.reset(seed=42)
+
+    planner = DirectPOMCPPlanner(n_rollouts=5, n_workers=2, gamma=0.99)
+
+    snapshot = serialize_state(env)
+    action_idx = planner.plan(snapshot)
+
+    assert isinstance(action_idx, int), f"Expected int, got {type(action_idx)}"
+    assert 0 <= action_idx <= 7, f"Action {action_idx} out of range 0-7"
+
+    planner.close()
+    env.close()
+    print("  PASS: DirectPOMCPPlanner returns valid action")
+
+
+def test_direct_planner_one_episode():
+    """Test 5: Run one full episode with DirectPOMCPPlanner, verify no crashes."""
+    from so_arm101_control.lego_pick_env import LegoPickEnv
+    from so_arm101_control.pomcp_env_bridge import serialize_state
+
+    sys.path.insert(0, '/home/the2xman/ASEN-5264-Project/vla_SO-ARM101/src/so_arm101_control/scripts')
+    from train_pomcp import DirectPOMCPPlanner, DISCRETE_ACTIONS
+
+    env = LegoPickEnv(belief_mode=True)
+    env.reset(seed=42)
+
+    planner = DirectPOMCPPlanner(n_rollouts=5, n_workers=2, gamma=0.99)
+    total_reward = 0.0
+    steps = 0
+
+    done = False
+    while not done and steps < 50:  # cap at 50 for test speed
+        snapshot = serialize_state(env)
+        action_idx = planner.plan(snapshot)
+        action = DISCRETE_ACTIONS[action_idx]
+        _, reward, terminated, truncated, info = env.step(action)
+        total_reward += reward
+        steps += 1
+        done = terminated or truncated
+
+    planner.close()
+    env.close()
+
+    print(f"  PASS: 1 episode completed in {steps} steps, reward={total_reward:.1f}")
+
+
 if __name__ == "__main__":
     tests = [
         ("serialize/restore roundtrip", test_serialize_restore_roundtrip),
         ("restore same trajectory", test_restore_produces_same_trajectory),
         ("heuristic phases", test_heuristic_phases),
+        ("direct planner valid action", test_direct_planner_returns_valid_action),
+        ("direct planner one episode", test_direct_planner_one_episode),
     ]
     passed = 0
     for name, fn in tests:
