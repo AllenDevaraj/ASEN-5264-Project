@@ -5,7 +5,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, '..')
+sys.path.insert(0, '/home/the2xman/ASEN-5264-Project/vla_SO-ARM101/src/so_arm101_control')
 
 from so_arm101_control.lego_pick_env import LegoPickEnv
 

@@ -46,8 +46,6 @@ def serialize_state(env):
         # Milestone flags
         "reached_block": env._reached_block,
         "reached_goal": env._reached_goal,
-        "lowered_near_block": env._lowered_near_block,
-        "first_grasp_attempt": env._first_grasp_attempt,
     }
 
     # Particle filter (only in belief mode)
@@ -92,8 +90,6 @@ def restore_state(env, snapshot):
     # Milestone flags
     env._reached_block = snapshot["reached_block"]
     env._reached_goal = snapshot["reached_goal"]
-    env._lowered_near_block = snapshot["lowered_near_block"]
-    env._first_grasp_attempt = snapshot["first_grasp_attempt"]
 
     # Particle filter
     if env.belief_mode and "pf_particles" in snapshot:

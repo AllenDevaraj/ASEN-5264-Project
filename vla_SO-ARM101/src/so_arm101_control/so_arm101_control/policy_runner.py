@@ -29,11 +29,12 @@ from so_arm101_control.particle_filter import ParticleFilter
 
 # Constants matching lego_pick_env.py
 TARGET_BLOCK = "red_lego_2x4"
-DISTRACTOR_BLOCK = "blue_lego_2x2"
-BLOCK_NAMES = [TARGET_BLOCK, DISTRACTOR_BLOCK]
+DISTRACTOR_BLOCKS = ["blue_lego_2x2", "green_lego_2x3"]
+BLOCK_NAMES = [TARGET_BLOCK] + DISTRACTOR_BLOCKS
 HALF_SIZES = {
-    "red_lego_2x4": (0.016, 0.008),
-    "blue_lego_2x2": (0.008, 0.008),
+    "red_lego_2x4":   (0.016, 0.008),
+    "blue_lego_2x2":  (0.032, 0.016),  # 64x32mm — doubled x2 for prominent occlusion
+    "green_lego_2x3": (0.012, 0.008),
 }
 TABLE_Z = 0.0055
 MIN_SPACING = 0.03
@@ -136,13 +137,10 @@ class PolicyRunner:
     def _build_plain_obs(self, block_true_poses, ee_pos):
         """Build wrist + overhead noisy observations (plain PPO mode)."""
         target = block_true_poses.get(TARGET_BLOCK)
-        distractor = block_true_poses.get(DISTRACTOR_BLOCK)
 
         if target is None:
             return self._last_wrist_obs.copy(), self._last_overhead_obs.copy()
 
-        # Wrist camera: noisy observation with occlusion check
-        # (skip wrist occlusion in ROS mode — no camera_link body to check against)
         wrist_noise = self.rng.normal(0, self.sigma_ep, 3)
         wrist_noise[2] = self.rng.normal(0, self.sigma_ep * 10)
         wrist_obs = np.array([
@@ -152,15 +150,17 @@ class PolicyRunner:
         ])
         self._last_wrist_obs = wrist_obs
 
-        # Overhead camera: noisy observation with occlusion check
-        overhead_occluded = False
-        if distractor is not None:
-            overhead_occluded = is_occluded_overhead(
+        # Overhead: occluded if any distractor covers target
+        overhead_occluded = any(
+            is_occluded_overhead(
                 target_pos=(target[0], target[1]),
-                occluder_pos=(distractor[0], distractor[1]),
-                occluder_half_size=HALF_SIZES[DISTRACTOR_BLOCK],
-                occluder_yaw=distractor[2],
+                occluder_pos=(block_true_poses[d][0], block_true_poses[d][1]),
+                occluder_half_size=HALF_SIZES[d],
+                occluder_yaw=block_true_poses[d][2],
             )
+            for d in DISTRACTOR_BLOCKS
+            if d in block_true_poses
+        )
 
         if overhead_occluded:
             overhead_obs = self._last_overhead_obs.copy()
@@ -179,22 +179,18 @@ class PolicyRunner:
     def _build_belief_obs(self, block_true_poses, ee_pos):
         """Build PF belief observations (belief PPO mode)."""
         target = block_true_poses.get(TARGET_BLOCK)
-        distractor = block_true_poses.get(DISTRACTOR_BLOCK)
 
         if target is None:
             mu, sigma = self.pf.get_belief()
             return mu[0], sigma[0]
 
-        # Initialize PF on first obs
         if self.step_count == 0:
             init_obs = np.array([[target[0], target[1], target[2]]])
             noise = self.rng.normal(0, self.sigma_ep * 3, (1, 3))
             self.pf.reset(init_obs + noise, sigma_init=0.05)
 
-        # Predict step
         self.pf.predict()
 
-        # Wrist camera update (always visible in ROS mode for simplicity)
         wrist_noise = self.rng.normal(0, self.sigma_ep, 3)
         wrist_noise[2] = self.rng.normal(0, self.sigma_ep * 10)
         wrist_obs = np.array([
@@ -204,15 +200,17 @@ class PolicyRunner:
         ])
         self.pf.update({0: wrist_obs}, self.sigma_ep)
 
-        # Overhead camera update (with occlusion check)
-        overhead_occluded = False
-        if distractor is not None:
-            overhead_occluded = is_occluded_overhead(
+        # Overhead: occluded if any distractor covers target
+        overhead_occluded = any(
+            is_occluded_overhead(
                 target_pos=(target[0], target[1]),
-                occluder_pos=(distractor[0], distractor[1]),
-                occluder_half_size=HALF_SIZES[DISTRACTOR_BLOCK],
-                occluder_yaw=distractor[2],
+                occluder_pos=(block_true_poses[d][0], block_true_poses[d][1]),
+                occluder_half_size=HALF_SIZES[d],
+                occluder_yaw=block_true_poses[d][2],
             )
+            for d in DISTRACTOR_BLOCKS
+            if d in block_true_poses
+        )
 
         if not overhead_occluded:
             oh_noise_xy = self.rng.normal(0, SIGMA_OVERHEAD, 2)
@@ -282,18 +280,22 @@ class PolicyRunner:
         return sol
 
     def check_grasp(self, ee_pos, block_true_poses):
-        """Attempt grasp with probabilistic success (matching env)."""
+        """Attempt grasp with 2D XY proximity check (matching training env).
+
+        Reverted from 3D to 2D to match lego_pick_env._attempt_grasp() after
+        Runs 14-18 showed 3D grasp creates an exploration problem PPO can't solve.
+        Only XY distance is checked — Z height is ignored.
+        """
         target = block_true_poses.get(TARGET_BLOCK)
         if target is None:
             return False
 
         block_xy = np.array([target[0], target[1]])
         ee_xy = ee_pos[:2]
-        dist = np.linalg.norm(ee_xy - block_xy)
+        dist_xy = np.linalg.norm(ee_xy - block_xy)
 
-        # Match training: sigmoid centered at 10mm, steep slope
-        p_grasp = 1.0 / (1.0 + math.exp(-300.0 * (0.01 - dist)))
-        if self.rng.random() < p_grasp:
+        GRASP_THRESHOLD = 0.015  # 15mm XY only, same as lego_pick_env.py
+        if dist_xy < GRASP_THRESHOLD:
             self.holding_block = True
             return True
         return False

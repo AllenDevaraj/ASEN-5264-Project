@@ -19,6 +19,14 @@ class ParticleFilter:
     """Bootstrap particle filter for block pose tracking.
 
     State per particle per block: (x, y, theta).
+
+    Design choices vs the April-19 overhaul:
+    - likelihood_scale=1.5 (not 3.0): moderate widening prevents catastrophic
+      collapse without flattening weights so much that localization fails.
+    - No resample jitter: jitter added 2mm noise every resample cycle — pure
+      accuracy loss for a stationary block.
+    - injection noise fixed at 5mm (not 2*sigma_obs): prevents injecting 40mm
+      particles at high noise which swamped the signal.
     """
 
     def __init__(
@@ -28,6 +36,7 @@ class ParticleFilter:
         process_noise_xy=0.001,
         process_noise_theta=0.01,
         injection_ratio=0.05,
+        likelihood_scale=1.5,
     ):
         """
         Args:
@@ -36,12 +45,15 @@ class ParticleFilter:
             process_noise_xy: Std of random walk in xy (meters/step).
             process_noise_theta: Std of random walk in theta (rad/step).
             injection_ratio: Fraction of particles redrawn from latest obs.
+            likelihood_scale: Multiplier on sigma_obs for observation likelihood.
+                1.5 balances collapse prevention vs. localization sharpness.
         """
         self.n_particles = n_particles
         self.n_blocks = n_blocks
         self.process_noise_xy = process_noise_xy
         self.process_noise_theta = process_noise_theta
         self.injection_ratio = injection_ratio
+        self.likelihood_scale = likelihood_scale
 
         # particles: (n_particles, n_blocks, 3) = [x, y, theta]
         self.particles = np.zeros((n_particles, n_blocks, 3))
@@ -94,8 +106,8 @@ class ParticleFilter:
             # Wrap theta difference to [-pi, pi]
             diff[:, 2] = (diff[:, 2] + np.pi) % (2 * np.pi) - np.pi
 
-            # Log-likelihood: sum of independent Gaussians
-            log_lik = -0.5 * np.sum((diff / sigma_obs) ** 2, axis=1)
+            lik_sigma = sigma_obs * self.likelihood_scale
+            log_lik = -0.5 * np.sum((diff / lik_sigma) ** 2, axis=1)
             # Multiply weights (in log space for stability)
             log_weights = np.log(self.weights + 1e-300) + log_lik
             log_weights -= np.max(log_weights)  # shift for numerical stability

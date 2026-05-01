@@ -4,6 +4,11 @@
 Task: Pick the red lego block and place it at a random goal position.
 A blue distractor block can occlude the target from the wrist and overhead cameras.
 
+Physics-based grasping: uses mj_step for full physics (gravity, contacts).
+Grasping is proximity-triggered when the gripper closes near the block, then
+the block is constrained to the gripper frame. On release, the block falls
+under gravity.
+
 Four uncertainty sources:
   1. Episodic sigma — wrist observation = true pose + N(0, sigma_ep^2)
   2. Overhead camera noise — fixed N(0, SIGMA_OVERHEAD^2)
@@ -11,8 +16,8 @@ Four uncertainty sources:
   4. Cost of looking — -1 reward per timestep
 
 Usage:
-    env = LegoPickEnv(belief_mode=False)  # Plain PPO (12D obs: joints + wrist + overhead)
-    env = LegoPickEnv(belief_mode=True)   # Belief PPO (12D obs: joints + PF belief)
+    env = LegoPickEnv(belief_mode=False)  # Plain PPO (18D obs)
+    env = LegoPickEnv(belief_mode=True)   # Belief PPO (18D obs)
     obs, info = env.reset()
     obs, reward, terminated, truncated, info = env.step(action)
 """
@@ -32,26 +37,28 @@ from so_arm101_control.compute_workspace import (
     geometric_ik,
 )
 from so_arm101_control.model_loader import (
+    build_freejoint_map,
     build_joint_map,
-    build_mocap_map,
     load_mujoco_model,
 )
 from so_arm101_control.occlusion import is_occluded, is_occluded_overhead
 from so_arm101_control.particle_filter import ParticleFilter
 
-# Block definitions (from randomize_legos.py)
+# Block definitions
 TARGET_BLOCK = "red_lego_2x4"
-DISTRACTOR_BLOCK = "blue_lego_2x2"
-BLOCK_NAMES = [TARGET_BLOCK, DISTRACTOR_BLOCK]
+DISTRACTOR_BLOCKS = ["blue_lego_2x2", "blue_lego_2x2_b"]
+BLOCK_NAMES = [TARGET_BLOCK] + DISTRACTOR_BLOCKS
 
 HALF_SIZES = {
-    "red_lego_2x4": (0.016, 0.008),
-    "green_lego_2x3": (0.012, 0.008),
-    "blue_lego_2x2": (0.008, 0.008),
+    "red_lego_2x4":     (0.016, 0.008),  # 32x16mm — target
+    "blue_lego_2x2":    (0.020, 0.010),  # 40x20mm — occlusion-tuned (was 64x32, too large)
+    "blue_lego_2x2_b":  (0.020, 0.010),  # 40x20mm — second blue occluder
+    "blue_lego_2x2_c":  (0.020, 0.010),  # 40x20mm — third blue occluder
 }
 
 TABLE_Z = 0.0055
-MIN_SPACING = 0.03
+MIN_SPACING = 0.010         # 10mm min spacing
+DISTRACTOR_NEAR_TARGET_RADIUS = 0.035  # distractors spawn within 35mm of target
 
 # Workspace bounds for block spawning (within arm reach)
 SPAWN_R_MIN = 0.12
@@ -62,7 +69,7 @@ SPAWN_ANGLE_MAX = 1.0
 # EE workspace limits
 EE_R_MIN = 0.09
 EE_R_MAX = 0.31
-EE_Z_MIN = 0.002   # just above table surface (TABLE_Z = 0.0055)
+EE_Z_MIN = 0.002   # just above table surface
 EE_Z_MAX = 0.12
 
 # Gripper joint limits (from URDF)
@@ -72,9 +79,15 @@ GRIPPER_CLOSED = 1.74533
 # Overhead camera noise (fixed, independent of episodic sigma)
 SIGMA_OVERHEAD = 0.005
 
+# Physics substeps per env step (at 0.0005s timestep = 5ms simulated per step)
+PHYSICS_SUBSTEPS = 10
+
+# Grasp proximity threshold (meters)
+GRASP_THRESHOLD = 0.015
+
 
 def _yaw_to_quat(yaw):
-    """Convert yaw angle to quaternion (w, x, y, z) for MuJoCo mocap."""
+    """Convert yaw angle to quaternion (w, x, y, z) for MuJoCo."""
     return np.array([math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)])
 
 
@@ -83,26 +96,18 @@ class LegoPickEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
-    MAX_STEPS = 200
+    MAX_STEPS = 300
 
     def __init__(
         self,
         belief_mode=False,
         use_camera_noise=False,
         sigma_low=0.003,
-        sigma_high=0.020,
+        sigma_high=0.015,
         approach_shaping=True,
         render_mode=None,
+        use_overhead_camera=False,
     ):
-        """
-        Args:
-            belief_mode: If True, use particle filter and return 12D obs.
-            use_camera_noise: If True, add distance-dependent noise on top.
-            sigma_low: Minimum episodic observation noise (meters).
-            sigma_high: Maximum episodic observation noise (meters).
-            approach_shaping: If True, add +0.5 reward for approaching block.
-            render_mode: "human" for viewer, "rgb_array" for image.
-        """
         super().__init__()
         self.belief_mode = belief_mode
         self.use_camera_noise = use_camera_noise
@@ -110,11 +115,12 @@ class LegoPickEnv(gym.Env):
         self.sigma_high = sigma_high
         self.approach_shaping = approach_shaping
         self.render_mode = render_mode
+        self.use_overhead_camera = use_overhead_camera
 
         # Load MuJoCo model
         self.model, self.data = load_mujoco_model()
         self.joint_map = build_joint_map(self.model)
-        self.mocap_map = build_mocap_map(self.model)
+        self.freejoint_map = build_freejoint_map(self.model)
 
         # Look up camera_link body for occlusion checks
         self._camera_link_id = mujoco.mj_name2id(
@@ -128,15 +134,32 @@ class LegoPickEnv(gym.Env):
                 self.model, mujoco.mjtObj.mjOBJ_BODY, name
             )
 
+        # Build list of robot qpos/qvel indices for save/restore during mj_step
+        self._robot_qpos_indices = []
+        self._robot_qvel_indices = []
+        robot_joint_names = list(ARM_JOINT_NAMES) + ['gripper_joint']
+        for name in robot_joint_names:
+            jnt_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            if jnt_id >= 0:
+                self._robot_qpos_indices.append(self.model.jnt_qposadr[jnt_id])
+                self._robot_qvel_indices.append(self.model.jnt_dofadr[jnt_id])
+
         # Action space: [dx, dy, dz, gripper_cmd]
         self.action_space = spaces.Box(
             low=np.array([-0.02, -0.02, -0.02, -1.0], dtype=np.float32),
             high=np.array([0.02, 0.02, 0.02, 1.0], dtype=np.float32),
         )
 
-        # Observation space (18D for both modes)
-        # [6 joints + 3 block obs/mu + 3 block obs/sigma + 3 ee_pos + 2 goal_xy + 1 holding]
-        obs_dim = 18
+        # Observation layout:
+        #   Plain:  15D [joints(6), stale_wrist(3),           ee(3), goal(2), holding(1)]
+        #   Belief: 18D [joints(6), pf_mu(3), pf_sigma(3),    ee(3), goal(2), holding(1)]
+        # Full sigma (x, y, theta uncertainty) matches the original design.
+        if self.belief_mode:
+            obs_dim = 18
+        elif self.use_overhead_camera:
+            obs_dim = 18
+        else:
+            obs_dim = 15
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -154,27 +177,33 @@ class LegoPickEnv(gym.Env):
         self._block_true_poses = {}  # name -> (x, y, yaw)
         self._goal_pos = None  # (x, y)
         self._gripper_closed = False
-        self._holding_block = False
+        self._holding_block = None  # None or block name string
         self._ee_pos = np.zeros(3)
+        self._last_wrist_obs = np.zeros(3)   # stale obs for plain mode during occlusion
+        self._step_noisy_obs = np.zeros(3)   # obs sampled once per step (used for reward + policy obs)
         self._prev_dist_to_block = None
         self._prev_dist_to_goal = None
-        self._reached_block = False  # one-time proximity milestone
-        self._reached_goal = False   # one-time proximity milestone
+        self._reached_block = False
+        self._reached_goal = False
+        # Offset from EE to block center when grasped (for constraint carrying)
+        self._grasp_offset = np.zeros(3)
+        self._prev_belief_sigma = None  # for info-gathering reward
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self._step_count = 0
-        self._holding_block = False
+        self._holding_block = None
         self._gripper_closed = False
         self._reached_block = False
         self._reached_goal = False
+        self._grasp_offset = np.zeros(3)
+        self._prev_belief_sigma = None
 
         # 1. Draw episodic noise level
         self._sigma_ep = self.np_random.uniform(self.sigma_low, self.sigma_high)
 
-        # 2. Reset arm to a starting position above workspace center
-        #    (all-zeros puts EE at r=0.39m which is outside workspace)
-        home_target = (0.18, 0.0, 0.06)  # above workspace center
+        # 2. Reset arm to starting position above workspace center
+        home_target = (0.18, 0.0, 0.06)
         home_solutions = geometric_ik(*home_target, grasp_yaw=0.0)
         if home_solutions:
             sol = home_solutions[0]
@@ -194,25 +223,33 @@ class LegoPickEnv(gym.Env):
         # 4. Sample goal position
         self._goal_pos = self._sample_table_position()
 
-        # 5. Step kinematics and get EE pos
-        mujoco.mj_forward(self.model, self.data)
+        # 5. Run physics to settle blocks on ground
+        self._step_physics()
         self._ee_pos = self._get_ee_pos()
 
-        # 6. Initial distance for approach shaping
-        target_xy = np.array([
-            self._block_true_poses[TARGET_BLOCK][0],
-            self._block_true_poses[TARGET_BLOCK][1],
-        ])
-        self._prev_dist_to_block = np.linalg.norm(self._ee_pos[:2] - target_xy)
-        self._prev_dist_to_goal = None  # set when holding block
+        # 6. Read settled block positions
+        self._read_block_poses()
 
-        # 7. Reset particle filter (feed both cameras)
+        # 7. Seed stale-obs cache and particle filter
+        self._last_wrist_obs = self._get_noisy_target_obs()
+        self._step_noisy_obs = self._last_wrist_obs.copy()
         if self.belief_mode:
-            noisy_obs = self._get_noisy_target_obs()
-            self.pf.reset(noisy_obs.reshape(1, 3), sigma_init=self._sigma_ep * 3)
-            overhead_obs = self._get_overhead_visible_observations()
-            if overhead_obs:
-                self.pf.update(overhead_obs, SIGMA_OVERHEAD)
+            noisy_obs = self._last_wrist_obs.copy()
+            self.pf.reset(noisy_obs.reshape(1, 3), sigma_init=min(self._sigma_ep * 3, 0.04))
+            if self.use_overhead_camera:
+                overhead_obs = self._get_overhead_visible_observations()
+                if overhead_obs:
+                    self.pf.update(overhead_obs, SIGMA_OVERHEAD)
+
+        # 8b. Initial prev_dist using observed block position (not true)
+        if self.belief_mode:
+            _mu, _ = self.pf.get_belief()
+            obs_block_xy = _mu[0, :2]
+        else:
+            obs_block_xy = self._last_wrist_obs[:2]
+        self._prev_dist_to_block = np.linalg.norm(self._ee_pos[:2] - obs_block_xy)
+        self._prev_ee_z = self._ee_pos[2]
+        self._prev_dist_to_goal = None
 
         obs = self._build_observation()
         info = {
@@ -244,123 +281,152 @@ class LegoPickEnv(gym.Env):
                 if name in self.joint_map and name in sol:
                     self.data.qpos[self.joint_map[name]] = sol[name]
 
-        # 4. Handle gripper
+        # 4. Handle gripper + auto-grasp
         want_close = gripper_cmd > 0.0
         grasp_result = None
 
-        if want_close and not self._gripper_closed and not self._holding_block:
-            # Attempting grasp
-            self._gripper_closed = True
-            self.data.qpos[self.joint_map["gripper_joint"]] = GRIPPER_CLOSED
-            grasp_result = self._attempt_grasp()
-            if grasp_result == "success":
-                self._holding_block = True
-        elif not want_close and self._gripper_closed:
-            # Opening gripper
-            self._gripper_closed = False
-            self.data.qpos[self.joint_map["gripper_joint"]] = GRIPPER_OPEN
+        # Auto-grasp: if EE is within grasp range of any block, pick it up
+        if not self._holding_block:
+            grabbed = self._attempt_grasp()
+            if grabbed is not None:
+                grasp_result = grabbed  # block name (target or distractor)
+                self._holding_block = grabbed
+                self._gripper_closed = True
+                self.data.qpos[self.joint_map["gripper_joint"]] = GRIPPER_CLOSED
 
-        # 5. Step kinematics
-        mujoco.mj_forward(self.model, self.data)
+        # 5. Step physics (blocks react to gravity and contacts)
+        self._step_physics()
         self._ee_pos = self._get_ee_pos()
 
-        # 6. Move held block with EE
+        # 6. If holding block, constrain it to gripper (position constraint)
         if self._holding_block:
-            self._update_held_block_pose()
+            self._constrain_held_block()
 
-        # 7. Update particle filter (dual camera)
+        # 7. Read block true poses from freejoint qpos
+        self._read_block_poses()
+
+        # 8. Sample block observation once this step (used for reward + policy obs)
+        # Must happen before reward so both use the same random draw.
+        if not self._is_target_occluded():
+            self._step_noisy_obs = self._get_noisy_target_obs()
+            self._last_wrist_obs = self._step_noisy_obs.copy()
+        # else: _last_wrist_obs stays stale, _step_noisy_obs stays from last visible step
+
+        # 8b. Update particle filter
         if self.belief_mode:
             self.pf.predict()
-            wrist_obs = self._get_visible_observations()
+            wrist_obs = {} if self._is_target_occluded() else {0: self._step_noisy_obs}
             self.pf.update(wrist_obs, self._get_effective_sigma())
-            overhead_obs = self._get_overhead_visible_observations()
-            self.pf.update(overhead_obs, SIGMA_OVERHEAD)
+            if self.use_overhead_camera:
+                overhead_obs = self._get_overhead_visible_observations()
+                self.pf.update(overhead_obs, SIGMA_OVERHEAD)
             self.pf.resample()
 
-        # 8. Compute reward (phase-based dense shaping)
-        target_xy = np.array([
-            self._block_true_poses[TARGET_BLOCK][0],
-            self._block_true_poses[TARGET_BLOCK][1],
-        ])
+        # 9. Compute reward using OBSERVED block position (not true state).
+        # Aligns reward signal with observation quality — belief PPO gets a more
+        # accurate gradient because PF mean is closer to true than raw noisy obs.
+        # Grasp and placement checks still use true physics state.
+        if self.belief_mode:
+            _mu, _ = self.pf.get_belief()
+            obs_block_xy = _mu[0, :2]
+        elif self._is_target_occluded():
+            obs_block_xy = self._last_wrist_obs[:2]
+        else:
+            obs_block_xy = self._step_noisy_obs[:2]
+
         ee_xy = self._ee_pos[:2]
-        dist_to_block = np.linalg.norm(ee_xy - target_xy)
+        dist_to_block = np.linalg.norm(ee_xy - obs_block_xy)
         dist_to_goal = np.linalg.norm(ee_xy - self._goal_pos)
+        ee_z = self._ee_pos[2]
 
         terminated = False
         placement_success = False
 
         if not self._holding_block:
-            # --- PHASE 1: Approach the block ---
+            # --- PHASE 1: Approach the block in XY ---
             reward = -1.0  # step cost
 
-            # Potential-based approach shaping (per-step, bounded)
+            # XY approach shaping
             if self._prev_dist_to_block is not None:
                 improvement = self._prev_dist_to_block - dist_to_block
                 reward += 3.0 * np.clip(improvement / 0.02, -1, 1)
             self._prev_dist_to_block = dist_to_block
 
-            # One-time milestone: reached the block vicinity
+            # Proximity bonus: continuous reward for being very close
+            if dist_to_block < 0.025:
+                reward += 2.0 * (1.0 - dist_to_block / 0.025)
+
+            # Close-in bonus: sharp spike inside 12mm to pull policy into grasp zone
+            if dist_to_block < 0.012:
+                reward += 3.0 * (1.0 - dist_to_block / 0.012)
+
+            # --- Milestone: reached block XY ---
             if dist_to_block < 0.015 and not self._reached_block:
                 self._reached_block = True
                 reward += 5.0
 
-            # Grasp outcomes (grasp_result is set only on gripper close transition)
-            if grasp_result == "success":
-                reward += 20.0
-            elif grasp_result == "fail":
-                if dist_to_block < 0.015:
-                    reward += 2.0   # good attempt, just unlucky
-                elif dist_to_block < 0.025:
-                    reward -= 0.5   # close but not close enough
-                else:
-                    reward -= 2.0   # too far, penalize
+            if grasp_result == TARGET_BLOCK:
+                reward += 10.0
+            elif grasp_result is not None:
+                # Grabbed a distractor — penalty and terminate
+                reward -= 15.0
+                terminated = True
 
         else:
             # --- PHASE 2: Carry block to goal ---
-            reward = -1.0  # same step cost — no free hovering
+            reward = -1.0
 
-            # Stronger potential-based goal approach shaping
             if self._prev_dist_to_goal is not None:
                 improvement = self._prev_dist_to_goal - dist_to_goal
                 reward += 5.0 * np.clip(improvement / 0.02, -1, 1)
             self._prev_dist_to_goal = dist_to_goal
 
-            # One-time milestone: reached the goal vicinity
             if dist_to_goal < 0.03 and not self._reached_goal:
                 self._reached_goal = True
                 reward += 5.0
 
-        # --- PHASE 3: Placement check ---
-        if self._holding_block and not want_close:
-            self._holding_block = False
-            self._release_block()
+        # --- PHASE 3: Placement check (only for target block) ---
+        # Auto-release: drop block when holding target and within goal range
+        if self._holding_block == TARGET_BLOCK and dist_to_goal < 0.02:
+            want_close = False
+        if self._holding_block == TARGET_BLOCK and not want_close:
+            released = self._holding_block
+            self._holding_block = None
+            self._release_block(released)
             dist_to_goal = np.linalg.norm(self._ee_pos[:2] - self._goal_pos)
             if dist_to_goal < 0.01:
-                reward += 50.0   # perfect placement
+                reward += 50.0
                 terminated = True
                 placement_success = True
             elif dist_to_goal < 0.02:
-                reward += 30.0   # precise placement
+                reward += 30.0
                 terminated = True
                 placement_success = True
             elif dist_to_goal < 0.04:
-                reward += 10.0   # close but imprecise
+                reward += 10.0
                 terminated = True
                 placement_success = True
             else:
-                reward -= 10.0   # missed badly
+                reward -= 10.0
             self._prev_dist_to_goal = None
 
         truncated = self._step_count >= self.MAX_STEPS
 
         obs = self._build_observation()
+        target_true = self._block_true_poses[TARGET_BLOCK]
         info = {
             "step": self._step_count,
             "sigma_ep": self._sigma_ep,
             "grasp_result": grasp_result,
             "holding": self._holding_block,
             "ee_pos": self._ee_pos.copy(),
+            "true_block_pos": np.array([target_true[0], target_true[1], target_true[2]]),
+            "wrist_occluded": self._is_target_occluded(),
             "overhead_occluded": self._is_target_occluded_overhead(),
+            "effective_sigma": self._get_effective_sigma(),
+            "dist_to_block": float(dist_to_block),
+            "dist_to_goal": float(dist_to_goal),
+            "reward": float(reward),
             "success": placement_success,
         }
         if self.belief_mode:
@@ -370,6 +436,57 @@ class LegoPickEnv(gym.Env):
             info["sigma_at_step"] = sigma[0].copy()
 
         return obs, reward, terminated, truncated, info
+
+    # ---- Physics ----
+
+    def _step_physics(self):
+        """Run physics substeps with save/restore for kinematically-driven robot."""
+        saved_qpos = [self.data.qpos[i] for i in self._robot_qpos_indices]
+        saved_qvel = [self.data.qvel[i] for i in self._robot_qvel_indices]
+
+        for _ in range(PHYSICS_SUBSTEPS):
+            mujoco.mj_step(self.model, self.data)
+            # Restore robot joints (kinematically driven)
+            for i, idx in enumerate(self._robot_qpos_indices):
+                self.data.qpos[idx] = saved_qpos[i]
+            for i, idx in enumerate(self._robot_qvel_indices):
+                self.data.qvel[idx] = saved_qvel[i]
+
+    # ---- Block positioning (freejoint) ----
+
+    def _set_block_pose(self, name, x, y, z, yaw):
+        """Set a free body's position via its freejoint qpos."""
+        if name not in self.freejoint_map:
+            return
+        qadr = self.freejoint_map[name]
+        self.data.qpos[qadr:qadr + 3] = [x, y, z]
+        self.data.qpos[qadr + 3:qadr + 7] = _yaw_to_quat(yaw)
+        # Zero velocity
+        body_id = self._block_body_ids.get(name, -1)
+        if body_id >= 0:
+            jnt_id = self.model.body_jntadr[body_id]
+            if jnt_id >= 0:
+                vadr = self.model.jnt_dofadr[jnt_id]
+                self.data.qvel[vadr:vadr + 6] = 0.0
+
+    def _get_block_pose(self, name):
+        """Read a free body's (x, y, z, qw, qx, qy, qz) from freejoint qpos."""
+        if name not in self.freejoint_map:
+            return None
+        qadr = self.freejoint_map[name]
+        pos = self.data.qpos[qadr:qadr + 3].copy()
+        quat = self.data.qpos[qadr + 3:qadr + 7].copy()
+        return pos, quat
+
+    def _read_block_poses(self):
+        """Update _block_true_poses from freejoint qpos."""
+        for name in BLOCK_NAMES:
+            result = self._get_block_pose(name)
+            if result is not None:
+                pos, quat = result
+                # Extract yaw from quaternion (rotation about z)
+                yaw = 2.0 * math.atan2(quat[3], quat[0])
+                self._block_true_poses[name] = (pos[0], pos[1], yaw)
 
     # ---- Internal methods ----
 
@@ -395,42 +512,69 @@ class LegoPickEnv(gym.Env):
         return pos
 
     def _randomize_blocks(self):
-        """Place blocks randomly on table within arm reach, non-overlapping."""
+        """Place blocks on table. Target spawns freely; distractors biased near target."""
         positions = []
-        for name in BLOCK_NAMES:
-            for _ in range(100):  # rejection sampling
-                angle = self.np_random.uniform(SPAWN_ANGLE_MIN, SPAWN_ANGLE_MAX)
-                r = self.np_random.uniform(SPAWN_R_MIN, SPAWN_R_MAX)
-                x = r * math.cos(angle)
-                y = r * math.sin(angle)
-                yaw = self.np_random.uniform(-math.pi, math.pi)
+        target_xy = None
 
-                # Check spacing with already placed blocks
-                too_close = False
-                for px, py, _ in positions:
-                    if math.sqrt((x - px) ** 2 + (y - py) ** 2) < MIN_SPACING:
-                        too_close = True
+        for idx, name in enumerate(BLOCK_NAMES):
+            is_distractor = (name in DISTRACTOR_BLOCKS)
+            placed = False
+
+            # Distractors: always spawn within DISTRACTOR_NEAR_TARGET_RADIUS of target.
+            # Only fall back to free spawn if near-spawn fails (rare geometry fail at workspace edge).
+            attempt_ranges = []
+            if is_distractor and target_xy is not None:
+                attempt_ranges.append(("near", 200))
+            attempt_ranges.append(("free", 100))
+
+            for mode, n_attempts in attempt_ranges:
+                for _ in range(n_attempts):
+                    if mode == "near":
+                        # Sample offset around target within DISTRACTOR_NEAR_TARGET_RADIUS
+                        angle_off = self.np_random.uniform(0, 2 * math.pi)
+                        dist_off = self.np_random.uniform(MIN_SPACING, DISTRACTOR_NEAR_TARGET_RADIUS)
+                        x = target_xy[0] + dist_off * math.cos(angle_off)
+                        y = target_xy[1] + dist_off * math.sin(angle_off)
+                        # Skip if outside workspace
+                        r = math.sqrt(x ** 2 + y ** 2)
+                        if r < SPAWN_R_MIN or r > SPAWN_R_MAX:
+                            continue
+                    else:
+                        angle = self.np_random.uniform(SPAWN_ANGLE_MIN, SPAWN_ANGLE_MAX)
+                        r = self.np_random.uniform(SPAWN_R_MIN, SPAWN_R_MAX)
+                        x = r * math.cos(angle)
+                        y = r * math.sin(angle)
+
+                    yaw = self.np_random.uniform(-math.pi, math.pi)
+                    too_close = any(
+                        math.sqrt((x - px) ** 2 + (y - py) ** 2) < MIN_SPACING
+                        for px, py, _ in positions
+                    )
+                    if not too_close:
+                        positions.append((x, y, yaw))
+                        if idx == 0:
+                            target_xy = (x, y)
+                        placed = True
                         break
-                if not too_close:
-                    positions.append((x, y, yaw))
+                if placed:
                     break
-            else:
-                # Fallback: place at evenly spaced fixed angles to guarantee separation
-                fallback_angle = SPAWN_ANGLE_MIN + (i / len(BLOCK_NAMES)) * (SPAWN_ANGLE_MAX - SPAWN_ANGLE_MIN)
+
+            if not placed:
+                # Last-resort fallback
+                fallback_angle = SPAWN_ANGLE_MIN + (idx / len(BLOCK_NAMES)) * (
+                    SPAWN_ANGLE_MAX - SPAWN_ANGLE_MIN
+                )
                 r = (SPAWN_R_MIN + SPAWN_R_MAX) / 2
                 x = r * math.cos(fallback_angle)
                 y = r * math.sin(fallback_angle)
-                yaw = 0.0
-                positions.append((x, y, yaw))
+                positions.append((x, y, 0.0))
+                if idx == 0:
+                    target_xy = (x, y)
 
         for i, name in enumerate(BLOCK_NAMES):
             x, y, yaw = positions[i]
             self._block_true_poses[name] = (x, y, yaw)
-
-            if name in self.mocap_map:
-                mocap_id = self.mocap_map[name]
-                self.data.mocap_pos[mocap_id] = [x, y, TABLE_Z]
-                self.data.mocap_quat[mocap_id] = _yaw_to_quat(yaw)
+            self._set_block_pose(name, x, y, TABLE_Z, yaw)
 
     def _sample_table_position(self):
         """Sample a goal position on the table, away from blocks."""
@@ -440,7 +584,6 @@ class LegoPickEnv(gym.Env):
             x = r * math.cos(angle)
             y = r * math.sin(angle)
 
-            # Ensure goal is away from all blocks
             too_close = False
             for name in BLOCK_NAMES:
                 if name in self._block_true_poses:
@@ -451,7 +594,6 @@ class LegoPickEnv(gym.Env):
             if not too_close:
                 return np.array([x, y])
 
-        # Fallback
         return np.array([0.18, -0.05])
 
     def _get_effective_sigma(self):
@@ -471,38 +613,65 @@ class LegoPickEnv(gym.Env):
         true = self._block_true_poses[TARGET_BLOCK]
         sigma = self._get_effective_sigma()
         noise = self.np_random.normal(0, sigma, 3)
-        # Scale theta noise (use sigma in radians ~ sigma * 10 for ~degrees)
         noise[2] = self.np_random.normal(0, sigma * 10)
         return np.array([true[0] + noise[0], true[1] + noise[1], true[2] + noise[2]])
 
+    _CAM_PITCH = math.pi / 7.2  # 25° down from horizontal
+
     def _get_camera_state(self):
-        """Get camera_link position and rotation matrix from MuJoCo."""
-        cam_pos = self.data.xpos[self._camera_link_id].copy()
-        cam_rot = self.data.xmat[self._camera_link_id].reshape(3, 3).copy()
+        """Virtual wrist camera: co-located with EE, pointed toward the target block
+        with a fixed 25° downward pitch.
+
+        Target-tracking ensures the camera always has the target in the frustum,
+        which is essential for the occlusion check to be meaningful. Distractors
+        near the target can then naturally block the view.
+        """
+        cam_pos = self._ee_pos.copy()
+
+        target = self._block_true_poses[TARGET_BLOCK]
+        dx = target[0] - cam_pos[0]
+        dy = target[1] - cam_pos[1]
+        if dx * dx + dy * dy < 1e-8:
+            yaw = 0.0
+        else:
+            yaw = math.atan2(dy, dx)
+
+        cp = math.cos(self._CAM_PITCH)
+        sp = math.sin(self._CAM_PITCH)
+        cy = math.cos(yaw)
+        sy = math.sin(yaw)
+
+        fwd = np.array([cp * cy, cp * sy, -sp])
+        right = np.array([-sy, cy, 0.0])
+        up = np.cross(fwd, right)
+
+        cam_rot = np.column_stack([fwd, right, up])
         return cam_pos, cam_rot
 
     def _is_target_occluded(self):
-        """Check if the target block is occluded by the distractor."""
+        """Check if the target block is occluded by any distractor (wrist camera)."""
         target = self._block_true_poses[TARGET_BLOCK]
-        distractor = self._block_true_poses[DISTRACTOR_BLOCK]
         cam_pos, cam_rot = self._get_camera_state()
 
-        return is_occluded(
-            target_pos=(target[0], target[1]),
-            target_half_size=HALF_SIZES[TARGET_BLOCK],
-            target_yaw=target[2],
-            occluder_pos=(distractor[0], distractor[1]),
-            occluder_half_size=HALF_SIZES[DISTRACTOR_BLOCK],
-            occluder_yaw=distractor[2],
-            camera_pos=cam_pos,
-            camera_rot=cam_rot,
-        )
+        for d_name in DISTRACTOR_BLOCKS:
+            distractor = self._block_true_poses[d_name]
+            if is_occluded(
+                target_pos=(target[0], target[1]),
+                target_half_size=HALF_SIZES[TARGET_BLOCK],
+                target_yaw=target[2],
+                occluder_pos=(distractor[0], distractor[1]),
+                occluder_half_size=HALF_SIZES[d_name],
+                occluder_yaw=distractor[2],
+                camera_pos=cam_pos,
+                camera_rot=cam_rot,
+            ):
+                return True
+        return False
 
     def _get_visible_observations(self):
         """Get observations for visible blocks (dict: block_idx -> obs)."""
         if self._is_target_occluded():
-            return {}  # target occluded, no observation
-
+            return {}
         noisy_obs = self._get_noisy_target_obs()
         return {0: noisy_obs}
 
@@ -515,15 +684,18 @@ class LegoPickEnv(gym.Env):
                          true[2] + noise_theta])
 
     def _is_target_occluded_overhead(self):
-        """Check if target block is occluded from overhead by distractor."""
+        """Check if target block is occluded from overhead by any distractor."""
         target = self._block_true_poses[TARGET_BLOCK]
-        distractor = self._block_true_poses[DISTRACTOR_BLOCK]
-        return is_occluded_overhead(
-            target_pos=(target[0], target[1]),
-            occluder_pos=(distractor[0], distractor[1]),
-            occluder_half_size=HALF_SIZES[DISTRACTOR_BLOCK],
-            occluder_yaw=distractor[2],
-        )
+        for d_name in DISTRACTOR_BLOCKS:
+            distractor = self._block_true_poses[d_name]
+            if is_occluded_overhead(
+                target_pos=(target[0], target[1]),
+                occluder_pos=(distractor[0], distractor[1]),
+                occluder_half_size=HALF_SIZES[d_name],
+                occluder_yaw=distractor[2],
+            ):
+                return True
+        return False
 
     def _get_overhead_visible_observations(self):
         """Get overhead camera observations for visible blocks."""
@@ -533,41 +705,75 @@ class LegoPickEnv(gym.Env):
         return {0: noisy_obs}
 
     def _attempt_grasp(self):
-        """Stochastic grasp based on EE-to-block distance."""
-        target = self._block_true_poses[TARGET_BLOCK]
-        block_xy = np.array([target[0], target[1]])
-        ee_xy = self._ee_pos[:2]
-        dist = np.linalg.norm(ee_xy - block_xy)
+        """Check proximity-based grasp against ALL blocks (2D XY check).
 
-        # sigmoid(300*(0.01-d)): p(0mm)=95%, p(5mm)=82%, p(10mm)=50%, p(15mm)=18%
-        p_grasp = 1.0 / (1.0 + math.exp(-300.0 * (0.01 - dist)))
-        if self.np_random.random() < p_grasp:
-            return "success"
-        return "fail"
+        Returns the name of the closest block within GRASP_THRESHOLD,
+        or None if no block is close enough. Grasping a distractor is
+        valid but penalized in the reward function.
+        """
+        closest_name = None
+        closest_dist = float('inf')
 
-    def _update_held_block_pose(self):
-        """Move held block to follow EE position."""
-        if TARGET_BLOCK in self.mocap_map:
-            mocap_id = self.mocap_map[TARGET_BLOCK]
-            self.data.mocap_pos[mocap_id][0] = self._ee_pos[0]
-            self.data.mocap_pos[mocap_id][1] = self._ee_pos[1]
-            # Keep z at table level unless EE is above table
-            self.data.mocap_pos[mocap_id][2] = max(TABLE_Z, self._ee_pos[2])
-            # Update true pose tracking
-            yaw = self._block_true_poses[TARGET_BLOCK][2]
-            self._block_true_poses[TARGET_BLOCK] = (
-                self._ee_pos[0], self._ee_pos[1], yaw
-            )
+        for name in BLOCK_NAMES:
+            if name not in self._block_true_poses:
+                continue
+            pose = self._block_true_poses[name]
+            block_pos = np.array([pose[0], pose[1], TABLE_Z])
+            dist_xy = np.linalg.norm(self._ee_pos[:2] - block_pos[:2])
+            if dist_xy < GRASP_THRESHOLD and dist_xy < closest_dist:
+                closest_dist = dist_xy
+                closest_name = name
 
-    def _release_block(self):
-        """Release block at current EE position (place on table)."""
-        if TARGET_BLOCK in self.mocap_map:
-            mocap_id = self.mocap_map[TARGET_BLOCK]
-            self.data.mocap_pos[mocap_id][2] = TABLE_Z
-            yaw = self._block_true_poses[TARGET_BLOCK][2]
-            self._block_true_poses[TARGET_BLOCK] = (
-                self._ee_pos[0], self._ee_pos[1], yaw
-            )
+        if closest_name is not None:
+            pose = self._block_true_poses[closest_name]
+            block_pos = np.array([pose[0], pose[1], TABLE_Z])
+            self._grasp_offset = block_pos - self._ee_pos
+            return closest_name
+        return None
+
+    def _constrain_held_block(self):
+        """Move held block to stay attached to gripper (position constraint).
+
+        Sets the block freejoint position relative to the EE each step.
+        Zeros block velocity so it doesn't drift.
+        """
+        held = self._holding_block
+        if not held or held not in self.freejoint_map:
+            return
+        qadr = self.freejoint_map[held]
+        # Block follows EE with the grasp offset
+        new_pos = self._ee_pos + self._grasp_offset
+        # Keep z at least at table level
+        new_pos[2] = max(TABLE_Z, new_pos[2])
+        self.data.qpos[qadr:qadr + 3] = new_pos
+        # Zero velocity
+        body_id = self._block_body_ids[held]
+        jnt_id = self.model.body_jntadr[body_id]
+        if jnt_id >= 0:
+            vadr = self.model.jnt_dofadr[jnt_id]
+            self.data.qvel[vadr:vadr + 6] = 0.0
+
+    def _release_block(self, block_name=None):
+        """Release block at current position. It will fall under gravity."""
+        name = block_name or TARGET_BLOCK
+        if name not in self.freejoint_map:
+            return
+        qadr = self.freejoint_map[name]
+        # Set block at table height at EE xy position
+        self.data.qpos[qadr] = self._ee_pos[0]
+        self.data.qpos[qadr + 1] = self._ee_pos[1]
+        self.data.qpos[qadr + 2] = TABLE_Z
+        # Zero velocity
+        body_id = self._block_body_ids[name]
+        jnt_id = self.model.body_jntadr[body_id]
+        if jnt_id >= 0:
+            vadr = self.model.jnt_dofadr[jnt_id]
+            self.data.qvel[vadr:vadr + 6] = 0.0
+        # Update true pose
+        yaw = self._block_true_poses[TARGET_BLOCK][2]
+        self._block_true_poses[TARGET_BLOCK] = (
+            self._ee_pos[0], self._ee_pos[1], yaw
+        )
 
     def _build_observation(self):
         """Construct 18D observation vector.
@@ -580,7 +786,6 @@ class LegoPickEnv(gym.Env):
           [15:17] goal position (x, y)
           [17]    holding flag (0 or 1)
         """
-        # Joint angles
         joint_obs = []
         for name in ARM_JOINT_NAMES:
             if name in self.joint_map:
@@ -590,10 +795,9 @@ class LegoPickEnv(gym.Env):
         gripper_val = self.data.qpos[self.joint_map["gripper_joint"]]
         joint_obs.append(gripper_val)
 
-        # Common suffix: EE pos, goal, holding
         ee_obs = self._ee_pos.tolist()
         goal_obs = self._goal_pos.tolist()
-        holding_obs = [1.0 if self._holding_block else 0.0]
+        holding_obs = [1.0 if self._holding_block == TARGET_BLOCK else 0.0]
 
         if self.belief_mode:
             mu, sigma = self.pf.get_belief()
@@ -601,10 +805,15 @@ class LegoPickEnv(gym.Env):
                 [joint_obs, mu[0], sigma[0], ee_obs, goal_obs, holding_obs]
             ).astype(np.float32)
         else:
-            wrist_obs = self._get_noisy_target_obs()
-            overhead_obs = self._get_overhead_noisy_obs()
+            # Use the obs already sampled in step() — don't draw a second random sample.
+            wrist_obs = self._last_wrist_obs
+            if self.use_overhead_camera:
+                overhead_obs = self._get_overhead_noisy_obs()
+                return np.concatenate(
+                    [joint_obs, wrist_obs, overhead_obs, ee_obs, goal_obs, holding_obs]
+                ).astype(np.float32)
             return np.concatenate(
-                [joint_obs, wrist_obs, overhead_obs, ee_obs, goal_obs, holding_obs]
+                [joint_obs, wrist_obs, ee_obs, goal_obs, holding_obs]
             ).astype(np.float32)
 
     def render(self):

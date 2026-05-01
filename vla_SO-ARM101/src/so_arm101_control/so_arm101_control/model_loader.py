@@ -215,3 +215,21 @@ def build_mocap_map(model):
             if name:
                 mocap_map[name] = model.body_mocapid[i]
     return mocap_map
+
+
+def build_freejoint_map(model):
+    """Build a mapping from free-body name -> qpos address for its freejoint.
+
+    Free joints have 7 qpos values: [x, y, z, qw, qx, qy, qz].
+
+    Returns:
+        dict mapping body name (str) to qpos start index (int).
+    """
+    fj_map = {}
+    for i in range(model.nbody):
+        jnt_id = model.body_jntadr[i]
+        if jnt_id >= 0 and model.jnt_type[jnt_id] == mujoco.mjtJoint.mjJNT_FREE:
+            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, i)
+            if name:
+                fj_map[name] = model.jnt_qposadr[jnt_id]
+    return fj_map

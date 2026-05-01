@@ -260,7 +260,7 @@ def _worker_loop(task_queue, result_queue, belief_mode):
     from so_arm101_control.pomcp_env_bridge import restore_state
     from so_arm101_control.pomcp_heuristic import heuristic_action
 
-    env = LegoPickEnv(belief_mode=belief_mode)
+    env = LegoPickEnv(belief_mode=belief_mode, use_camera_noise=True)
     env.reset(seed=0)
 
     while True:
@@ -398,7 +398,7 @@ def evaluate_pomcp_direct(n_episodes=100, n_rollouts=100, n_workers=8,
     import json
     import time
 
-    env = LegoPickEnv(belief_mode=True)
+    env = LegoPickEnv(belief_mode=True, use_camera_noise=True)
     planner = DirectPOMCPPlanner(
         n_rollouts=n_rollouts, n_workers=n_workers, gamma=gamma
     )
@@ -442,11 +442,12 @@ def evaluate_pomcp_direct(n_episodes=100, n_rollouts=100, n_workers=8,
             elif dist < 0.04:
                 close += 1
 
-        if (ep + 1) % 10 == 0 or (ep + 1) == n_episodes:
-            print(f"  Episode {ep+1}/{n_episodes}: "
-                  f"success={successes}/{ep+1} ({successes/(ep+1)*100:.1f}%), "
-                  f"avg_steps={np.mean(episode_lengths):.1f}, "
-                  f"avg_plan_time={np.mean(planning_times):.1f}s")
+        result_str = "✓" if info.get("success", False) else "✗"
+        print(f"  [{ep+1:>3}/{n_episodes}] {result_str}  "
+              f"steps={steps:>4}  return={total_return:>8.1f}  "
+              f"plan={np.mean(planning_times[-steps:]):.1f}s/step  "
+              f"success={successes}/{ep+1} ({successes/(ep+1)*100:.0f}%)",
+              flush=True)
 
     planner.close()
     env.close()
