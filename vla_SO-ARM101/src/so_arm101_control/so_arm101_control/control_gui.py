@@ -252,7 +252,9 @@ class SOArm101ControlGUI(Node):
         self._arm_goal_lock = threading.Lock()
         self._gripper_goal_lock = threading.Lock()
 
-        # --- Gripper topic publisher (works fine via topic) ---
+        # --- Direct trajectory topic publishers (used by RL policy loop — no action handshake) ---
+        self.arm_traj_pub = self.create_publisher(
+            JointTrajectory, '/arm_controller/joint_trajectory', 10)
         self.gripper_traj_pub = self.create_publisher(
             JointTrajectory, '/gripper_controller/joint_trajectory', 10)
         # Hardware commands (for real servo driver)
@@ -614,6 +616,20 @@ class SOArm101ControlGUI(Node):
 
         future = self.arm_action_client.send_goal_async(goal)
         future.add_done_callback(self._arm_goal_response)
+
+    def _send_arm_traj_direct(self, positions, duration_s=0.05):
+        """Publish arm trajectory directly to topic — no action handshake, for RL streaming."""
+        traj = JointTrajectory()
+        traj.header.stamp = Time(sec=0, nanosec=0)
+        traj.joint_names = list(ARM_JOINT_NAMES)
+        point = JointTrajectoryPoint()
+        point.positions = [positions.get(n, 0.0) for n in ARM_JOINT_NAMES]
+        # Leave velocities empty — controller interpolates through without stopping
+        point.time_from_start = Duration(
+            sec=int(duration_s),
+            nanosec=int((duration_s % 1) * 1e9))
+        traj.points = [point]
+        self.arm_traj_pub.publish(traj)
 
     def _arm_goal_response(self, future):
         try:
@@ -2828,10 +2844,11 @@ class SOArm101ControlGUI(Node):
             self._append_log(
                 f'RL: sigma_ep={runner.sigma_ep*1000:.1f}mm, starting policy loop')
 
-            # 5. Run policy at ~20Hz with 1.5x action speed to compensate for real motion delay
-            max_steps = 6000
+            # Policy trained for MAX_STEPS=300 at 20Hz (15s per episode).
+            # speed_scale=1.0 matches training: each step moves EE up to 0.02m.
+            max_steps = 300
             rate_period = 0.05
-            speed_scale = 1.5
+            speed_scale = 1.0
 
             for step in range(max_steps):
                 if not self._rl_running:
@@ -2882,39 +2899,32 @@ class SOArm101ControlGUI(Node):
                           f'{"HOLDING" if runner.holding_block else ""}')
                 self.root.after(0, self._rl_status_var.set, status)
 
-                # Send arm trajectory (3x speed to compensate for real motion delay)
                 new_joints = runner.ik_step(ee_pos, action, speed_scale=speed_scale)
                 if new_joints is not None:
-                    self._send_arm_goal(new_joints, duration_s=0.08)
+                    self._send_arm_traj_direct(new_joints, duration_s=0.02)
 
-                # Handle gripper transitions
-                want_close = gripper_cmd > 0.0
-
-                # Gripper convention is INVERTED between training and real robot:
-                #   Training: GRIPPER_CLOSED=1.745 (max), GRIPPER_OPEN=-0.174 (min)
-                #   Real bot: min=-0.174 = physically closed, max=1.745 = physically open
-                if want_close and not runner.gripper_closed:
-                    runner.gripper_closed = True
-                    # Physically close = send MIN value
-                    self._send_gripper_goal(
-                        JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
-                    target = block_true.get('red_lego_2x4')
-                    if target:
-                        gdist = np.linalg.norm(ee_pos[:2] - np.array([target[0], target[1]]))
-                    else:
-                        gdist = float('inf')
+                # Auto-grasp every step (matches training env: proximity-triggered,
+                # independent of gripper_cmd — the policy never learned to gate on it)
+                if not runner.holding_block:
                     success = runner.check_grasp(ee_pos, block_true)
                     if success:
+                        target = block_true.get('red_lego_2x4')
+                        gdist = np.linalg.norm(
+                            ee_pos[:2] - np.array([target[0], target[1]])) if target else 0.0
                         self._append_log(f'RL: Grasp SUCCESS at step {step}! dist={gdist*1000:.1f}mm')
-                    else:
-                        self._append_log(f'RL: Grasp failed at step {step}, dist={gdist*1000:.1f}mm')
+                        runner.gripper_closed = True
+                        # Physically close = send MIN value (convention inverted from training)
+                        self._send_gripper_goal(
+                            JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
 
+                # Gripper visual + release logic
+                want_close = gripper_cmd > 0.0
+                if want_close and not runner.gripper_closed:
+                    runner.gripper_closed = True
+                    self._send_gripper_goal(JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
                 elif not want_close and runner.gripper_closed:
                     runner.gripper_closed = False
-                    # Physically open = send MAX value
-                    self._send_gripper_goal(
-                        JOINT_LIMITS['gripper_joint'][1], duration_s=0.3)
-
+                    self._send_gripper_goal(JOINT_LIMITS['gripper_joint'][1], duration_s=0.3)
                     if runner.holding_block:
                         runner.holding_block = False
                         dist = np.linalg.norm(ee_pos[:2] - goal_xy)

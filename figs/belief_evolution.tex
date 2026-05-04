@@ -1,0 +1,98 @@
+\documentclass[border=4pt]{standalone}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{groupplots}
+
+% Match main paper style
+\pgfplotsset{
+  paper/.style={
+    font=\small,
+    grid=major,
+    grid style={dashed, black!20},
+    tick label style={font=\scriptsize},
+    label style={font=\small},
+    legend style={
+      font=\scriptsize, draw=black!30, fill=white,
+      inner sep=3pt, rounded corners=2pt,
+    },
+    every axis plot/.append style={line width=1.3pt},
+    axis line style={black!60},
+    tick style={black!50},
+  },
+}
+
+\definecolor{beliefcol}{HTML}{d6604d}   % same red-orange as paper
+\definecolor{distcol}  {HTML}{2166ac}   % same blue as paper
+
+\begin{document}
+\begin{tikzpicture}
+\begin{groupplot}[
+  paper,
+  group style={
+    group size=1 by 2,
+    vertical sep=3mm,
+    xlabels at=edge bottom,
+    xticklabels at=edge bottom,
+  },
+  width=8.6cm,
+  height=3.8cm,
+  xmin=0, xmax=192,
+  enlarge x limits=false,
+]
+
+%% ── Top: Belief uncertainty σ_b ─────────────────────────────────────────
+\nextgroupplot[
+  ylabel={Belief $\sigma_b$ (mm)},
+  ymin=0, ymax=82,
+  legend pos=north west,
+  legend columns=3,
+  legend style={at={(0.5,1.02)}, anchor=south, legend columns=3},
+]
+
+% occlusion shading
+\addplot[draw=none, fill=black!8]
+  coordinates {(0,0)(0,82)(178,82)(178,0)} \closedcycle;
+\addlegendentry{Occlusion (wrist camera)};
+
+% sigma line
+\addplot[beliefcol]
+  table[x=step, y=sigma_mm, col sep=comma]{../data/belief_evolution.csv};
+\addlegendentry{$\sigma_b$ (particle filter)};
+
+% grasp marker
+\addplot[green!60!black, dashed, line width=1.0pt]
+  coordinates {(188,0)(188,82)};
+\addlegendentry{Grasp event};
+
+% annotation: occlusion label
+\node[font=\scriptsize, text=black!45, anchor=north west]
+  at (axis cs:1, 80) {prolonged occlusion};
+
+% annotation: recovery label
+\node[font=\scriptsize, text=black!55, anchor=north east]
+  at (axis cs:191, 80) {approach};
+
+%% ── Bottom: Distance to target ──────────────────────────────────────────
+\nextgroupplot[
+  xlabel={Timestep},
+  ylabel={Dist.\ to target (mm)},
+  ymin=0, ymax=165,
+]
+
+% occlusion shading
+\addplot[draw=none, fill=black!8]
+  coordinates {(0,0)(0,165)(178,165)(178,0)} \closedcycle;
+
+% distance line
+\addplot[distcol]
+  table[x=step, y=dist_mm, col sep=comma]{../data/belief_evolution.csv};
+
+% grasp marker
+\addplot[green!60!black, dashed, line width=1.0pt]
+  coordinates {(188,0)(188,165)};
+
+\end{groupplot}
+\end{tikzpicture}
+\end{document}

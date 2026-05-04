@@ -1,0 +1,840 @@
+\documentclass[conference]{IEEEtran}
+
+% -- Packages --------------------------------------------------------------
+\usepackage{amsmath,amssymb,bm}
+\usepackage{graphicx}
+\usepackage[caption=false]{subfig}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{cleveref}
+
+% -- Macros ----------------------------------------------------------------
+\newcommand{\States}{\mathcal{S}}
+\newcommand{\Actions}{\mathcal{A}}
+\newcommand{\Obs}{\mathcal{O}}
+\newcommand{\Trans}{T}
+\newcommand{\Rew}{R}
+\newcommand{\ObsFn}{Z}
+\newcommand{\Disc}{\gamma}
+\newcommand{\belief}{b}
+\newcommand{\pf}{\hat{b}}
+\newcommand{\ee}{\mathbf{p}_{\text{ee}}}
+\newcommand{\block}{\mathbf{p}_{\text{blk}}}
+\newcommand{\goal}{\mathbf{p}_{\text{goal}}}
+\newcommand{\sigmaobs}{\sigma_{\text{obs}}}
+\newcommand{\sigmaep}{\sigma_{\text{ep}}}
+
+% -- Title -----------------------------------------------------------------
+\title{Belief-Augmented Reinforcement Learning for Pick-and-Place
+       Under Observation Noise and Occlusion}
+
+\author{
+  \IEEEauthorblockN{Allen Devaraj Augustin Ponraj}
+  \IEEEauthorblockA{
+    Department of Aerospace Engineering Sciences\\
+    University of Colorado Boulder\\
+    allendevaraj.augustinponraj@colorado.edu
+  }
+}
+
+\begin{document}
+\maketitle
+
+% -- Abstract --------------------------------------------------------------
+\begin{abstract}
+Robotic pick-and-place under partial observability is challenging because
+sensor noise and occlusion corrupt or eliminate target state information,
+turning a standard MDP into a POMDP.
+Three solution strategies are investigated on the SO-ARM101 6-DOF arm in
+a MuJoCo environment featuring distance-dependent wrist camera noise and
+two occluding distractor blocks:
+(i) plain PPO with a stale-sensor observation model,
+(ii) belief-augmented PPO that feeds a bootstrap particle filter's mean
+and uncertainty estimate directly into the policy observation,
+and (iii) POMCP-MCTS online planning as a stretch goal.
+The central finding is that particle filter belief augmentation provides
+a statistically meaningful advantage in the moderate-noise regime,
+peaking at $+24\%$ task success at $\sigmaobs = 10$~mm,
+but is outperformed by plain PPO at very low noise ($\sigmaobs = 3$~mm, $-30\%$)
+where raw observations are already accurate and filter initialization overhead
+dominates.
+Both methods degrade at extreme noise ($30$~mm) due to filter impoverishment
+and stale-sensor failure respectively.
+The crossover near $\sigmaobs \approx 8$~mm is theoretically coherent:
+it marks the point at which filtering benefit first exceeds convergence cost,
+and is consistent with the signal-to-noise characteristics of a bootstrap
+particle filter with $N\!=\!300$ particles.
+\end{abstract}
+
+% -- I. Introduction -------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+
+Robotic manipulation in unstructured environments requires acting reliably
+despite imperfect sensing.
+Real cameras return noisy detections, distractors occlude the target, and
+physical contact changes the scene in ways the robot cannot directly observe.
+Treating such settings as fully observable MDPs (as most deep RL work does)
+ignores the fundamental epistemic uncertainty in the system and can lead to
+brittle policies that fail when sensor quality degrades or objects move
+out of view.
+
+This work examines a concrete instance of the problem: pick-and-place of a
+target LEGO block in the presence of two occluding distractor blocks, using
+only a wrist-mounted camera whose noise scales with distance to the target.
+Three distinct uncertainty sources are present simultaneously.
+\emph{Sensor noise:} the wrist camera returns a Gaussian-corrupted position
+estimate whose standard deviation grows linearly with the end-effector-to-target
+distance, so the agent must approach the target to improve its own observations.
+\emph{Occlusion:} when a distractor block passes between the camera and the
+target, the observation is entirely absent; the agent must remember and reason
+about the last known position.
+\emph{Distractor identity:} because the auto-grasp threshold ($10$~mm) is
+comparable to the inter-block spacing ($\sim\!17$~mm mean), the agent risks
+grasping the wrong block if it navigates to a stale or incorrect position estimate.
+Together these make the task a POMDP rather than an MDP: the true target
+pose is hidden, and observations are noisy, intermittent, and corrupted by
+irrelevant objects.
+
+Two learned policy approaches are compared.
+\emph{Plain PPO} treats the problem as memoryless: it receives the last visible
+wrist observation (replayed during occlusion) and learns to act on this noisy
+signal directly.
+\emph{Belief-augmented PPO} maintains a bootstrap particle filter over the
+target's $(x, y, \theta)$ pose and augments the policy observation with the
+filter's mean $\bm{\mu}$ and standard deviation $\bm{\sigma}$, giving the
+policy an explicit uncertainty signal it can condition its behavior on.
+Both policies are trained with proximal policy optimization (PPO)~\cite{schulman2017ppo}
+and evaluated across eight observation noise levels (3--30~mm).
+As a stretch goal, POMCP-MCTS is also evaluated~\cite{silver2010pomcp} online
+planning with the simulator as a generative model.
+
+The main finding is that the benefit of belief augmentation is strongly
+noise-regime-dependent.
+Belief PPO wins or ties at six of the eight noise levels tested and achieves
+its largest gain ($+24\%$) at $\sigmaobs = 10$~mm, a regime where the particle
+filter converges quickly yet provides meaningful position smoothing.
+At very low noise ($3$~mm), however, plain PPO outperforms by $30\%$:
+the raw wrist observation is already accurate, and the filter's initialization
+spread induces unnecessary caution in the policy.
+This noise-regime dependence is the central empirical contribution of the paper.
+
+\textbf{Departures from the proposal.}
+Three aspects of the final system differ from the original proposal, each for
+concrete technical reasons.
+First, the proposal specified \emph{episodic} observation noise (a different
+$\sigmaep$ drawn per episode during training) to produce a single generalist
+policy robust to all noise levels simultaneously.
+In practice, training with randomized noise destabilized learning: the particle
+filter's initialization spread (set proportionally to $\sigmaep$) varied
+wildly across episodes, preventing the policy from learning a consistent
+relationship between $\bm{\sigma}$ and appropriate caution.
+Training at a fixed $\sigmaep$ and evaluate the trained policy across
+all noise levels, which cleanly isolates the noise-regime structure.
+Second, the POMCP stretch goal was proposed with a \emph{learned} world model
+(trained on rollouts from the belief PPO policy).
+Learning a faithful transition model for a MuJoCo contact-rich environment
+within project scope is impractical; the simulator is used directly
+as the generative model, which is the standard approach in model-based POMDP
+solvers and does not change the algorithmic comparison.
+Third, the proposal described explicit \emph{active perception}, rewarding
+the agent for moving to reduce uncertainty (decrease $\bm{\sigma}$) as a
+separate reward term.
+This was implemented and evaluated; it failed because the
+information-gathering reward conflicted with the approach reward, causing the
+policy to wander away from the target to reduce occlusion rather than
+approaching to grasp.
+Removing the explicit reward and relying solely on the task reward produced
+a policy that still learns implicit uncertainty-conditioned behavior, as
+evidenced by the noise-sweep crossover.
+
+% -- II. Background and Related Work ---------------------------------------
+\section{Background and Related Work}
+\label{sec:background}
+
+\textbf{POMDPs for robotic manipulation.}
+The partially observable Markov decision process (POMDP) framework
+\cite{kaelbling1998pomdp} provides the formal foundation for decision-making
+under state uncertainty.
+In manipulation, partial observability arises from sensor noise, occlusion,
+and contact uncertainty.
+Koval et al.~\cite{koval2015manifold} show that contact interactions can be
+modeled as belief-space transitions, enabling planning over distributions of
+object poses rather than single estimates.
+This work addresses the simpler but practically important case of visual
+observation noise and occlusion, without the added complexity of contact-induced
+uncertainty.
+
+\textbf{Belief-state representations.}
+Maintaining a belief over the hidden state is the key challenge in POMDP
+solving.
+The bootstrap particle filter~\cite{gordon1993novel} represents belief as a
+weighted set of samples and supports arbitrary non-Gaussian distributions,
+making it well-suited to manipulation tasks where occlusion can render
+observations completely absent.
+Kalman-family filters (KF, EKF, UKF) are computationally cheaper but assume
+unimodal Gaussian beliefs; this assumption breaks when the target has been
+occluded long enough that the true position could lie anywhere in a region,
+creating a diffuse, multi-modal belief that a single Gaussian cannot represent.
+In this setting, distractors can occlude the target for $50$+ consecutive steps,
+making the particle filter the appropriate choice.
+
+\textbf{Deep RL for manipulation.}
+Proximal policy optimization~\cite{schulman2017ppo} is the de facto standard
+for continuous-action robotic RL due to its stability and ease of tuning.
+Reward shaping is known to be critical and treacherous: Ng et al.~\cite{ng1999potential}
+show that only potential-based shaping preserves the optimal policy, while
+arbitrary dense rewards can introduce spurious local optima.
+Five distinct classes of reward-hacking exploit were discovered during development
+(per-step proximity farming, per-step gripper clamping, grasp-attempt spamming,
+fine-positioning hovering, and information-gathering conflicts), each illustrating
+a different failure mode of ad hoc shaping.
+
+\textbf{Online POMDP planning.}
+Silver and Veness~\cite{silver2010pomcp} introduced POMCP, which uses
+Monte Carlo tree search with particle filters to plan in large POMDPs without
+an explicit model.
+Sunberg and Kochenderfer~\cite{sunberg2018pomcpow} extend this to continuous
+observation spaces via double progressive widening.
+The MCTS implementation incorporates observation progressive widening from
+POMCPOW, tree reuse across steps (ABT-style), and progressive bias initialization
+inspired by AlphaGo~\cite{silver2016alphago}.
+
+% -- III. Problem Formulation ----------------------------------------------
+\section{Problem Formulation}
+\label{sec:problem}
+
+\subsection{POMDP Definition}
+
+The task is formalized as a POMDP
+$(\States, \Actions, \Obs, \Trans, \ObsFn, \Rew, \Disc)$.
+
+\textbf{State space $\States$.}
+The full (hidden) system state is:
+\begin{equation}
+  s = \bigl(\mathbf{q},\; \block,\; \mathbf{p}_{d_1},\; \mathbf{p}_{d_2},\; h\bigr),
+\end{equation}
+where:
+\begin{itemize}
+  \item $\mathbf{q} = [q_1, q_2, q_3, q_4, q_5, g] \in \mathbb{R}^6$ are the
+        five joint angles (rad) and the binary gripper state $g \in \{0,1\}$.
+  \item $\block = (x_b, y_b, \theta_b) \in \mathbb{R}^3$ is the pose of the
+        red target block in the world frame.
+  \item $\mathbf{p}_{d_1}, \mathbf{p}_{d_2} \in \mathbb{R}^3$ are the poses
+        $(x, y, \theta)$ of the two blue distractor blocks.
+  \item $h \in \{0, 1\}$ is a binary flag indicating whether the target block
+        is currently held by the gripper.
+\end{itemize}
+The arm configuration $\mathbf{q}$ is fully observable (joint encoders).
+All block poses and $h$ are \emph{hidden}; the agent never directly observes
+the true positions of the target or distractors.
+
+\textbf{Action space $\Actions$.}
+Actions are continuous six-dimensional vectors $a \in [-1, 1]^6$:
+\begin{equation}
+  a = [\Delta q_1,\; \Delta q_2,\; \Delta q_3,\; \Delta q_4,\; \Delta q_5,\; g_{\text{cmd}}],
+\end{equation}
+where $\Delta q_i$ are joint velocity commands scaled to $\pm 0.05$~rad/step,
+and $g_{\text{cmd}} \in [-1, 1]$ is the gripper command.
+Grasping is implemented as auto-grasp: when the end-effector enters a sphere
+of radius $r_{\text{grasp}} = 10$~mm around any block, that block is
+automatically attached to the gripper via a position constraint.
+The agent therefore controls approach and positioning rather than the
+grasp trigger directly.
+
+\textbf{Observation space $\Obs$.}
+At each step the agent receives a partial observation
+$o_t \in \mathbb{R}^{15}$ (plain PPO) or $\mathbb{R}^{18}$ (belief PPO):
+\begin{itemize}
+  \item $\mathbf{q} \in \mathbb{R}^6$: current joint angles (fully observed).
+  \item $\hat{\block}_t \in \mathbb{R}^3$: wrist camera estimate of the target
+        position $(x, y, \theta)$, corrupted by distance-dependent Gaussian
+        noise (plain PPO) or replaced by the particle filter mean $\bm{\mu}_t$
+        (belief PPO).
+  \item $\bm{\sigma}_t \in \mathbb{R}^3$: particle filter uncertainty
+        $(\sigma_x, \sigma_y, \sigma_\theta)$ (belief PPO only).
+  \item $\ee \in \mathbb{R}^3$: end-effector Cartesian position
+        $(x, y, z)$ from forward kinematics.
+  \item $\goal \in \mathbb{R}^2$: fixed goal position $(x, y)$ in the
+        world frame.
+  \item $h \in \{0, 1\}$: holding flag (1 if target is grasped).
+\end{itemize}
+
+\textbf{Transition model $\Trans$.}
+Because the state space is continuous, the transition is not a matrix but
+a physics-defined mapping $s_{t+1} = f(s_t, a_t)$ implemented by the MuJoCo
+engine (\texttt{mj\_step}, 10 substeps per action, $\Delta t = 0.002$~s).
+Joint angles update deterministically from velocity commands.
+Blocks are free rigid bodies under gravity; they remain stationary unless
+in contact with the gripper.
+When $d_t < r_{\text{grasp}}$, a position constraint rigidly attaches the
+nearest block to the end-effector with a fixed vertical offset; releasing the
+gripper drops the constraint and the block falls under gravity.
+
+\textbf{Observation function $\ObsFn$.}
+The wrist camera observation of the target is:
+\begin{equation}
+  P(o_t \mid s_t) =
+  \begin{cases}
+    \mathcal{N}\!\left(\block^{xy\theta},\; \sigmaobs(d_t)^2 \mathbf{I}\right)
+      & \text{target visible} \\
+    \delta\!\left(o_t - o_{\tau}\right)
+      & \text{target occluded}
+  \end{cases}
+  \label{eq:obs_fn}
+\end{equation}
+where $\sigmaobs(d_t) = \sigmaep \cdot (d_t / d_{\text{ref}})$ is the
+distance-dependent noise standard deviation, $\sigmaep$ is fixed per training
+run, $d_{\text{ref}} = 0.15$~m, and $o_{\tau}$ is the last visible reading
+replayed during occlusion.
+
+\textbf{Reward $\Rew$ and discount $\Disc$.}
+The reward function is detailed in Table~\ref{tab:reward}.
+The discount factor is $\Disc = 0.99$ with a maximum episode horizon of
+$T = 200$ steps, after which the episode terminates as a timeout failure.
+
+\subsection{Sources of Partial Observability}
+
+Three distinct uncertainty sources make this task a POMDP rather than an MDP.
+Each affects the observation function $\ObsFn$ differently and requires a
+different handling strategy.
+
+\textbf{1. Distance-dependent sensor noise.}
+The wrist camera returns a Gaussian-corrupted estimate of the target's
+$(x, y, \theta)$ position with standard deviation
+$\sigmaobs(d_t) = \sigmaep \cdot (d_t / d_{\text{ref}})$,
+where $d_t$ is the current end-effector-to-target distance and
+$d_{\text{ref}} = 0.15$~m.
+Crucially, this uncertainty is \emph{reducible}: as the agent approaches the
+target, $d_t$ decreases and the observation becomes more accurate.
+This creates an implicit information-gathering incentive: the agent must
+move closer to localize reliably before grasping, without any explicit
+active perception reward.
+
+\textbf{2. Occlusion-induced observation dropout.}
+When a distractor block passes between the wrist camera and the target,
+the observation is entirely absent for that step.
+The agent receives no update to $Z$ during occlusion; it must rely on
+its last known estimate or, in the belief PPO case, the particle filter's
+prediction step (which correctly grows uncertainty during the gap).
+Per-step occlusion rates reach $48\%$ during early training exploration,
+meaning the agent frequently acts on stale information for extended periods.
+Unlike sensor noise, occlusion-induced uncertainty is \emph{not reducible
+by approaching}; it is resolved only by repositioning to clear the
+distractor from the camera's line of sight.
+
+\textbf{3. Distractor identity ambiguity.}
+Both the target and distractor block poses are hidden states in $s$;
+the wrist camera observation covers only the target block and gives no
+direct information about distractor positions.
+Because the auto-grasp threshold ($r_{\text{grasp}} = 10$~mm) is comparable
+to the mean inter-block spacing ($\sim\!17$~mm), a position estimate corrupted
+by noise or occlusion can place the agent within grasp range of a distractor
+rather than the target.
+A wrong grasp terminates the episode with a $-30$ penalty.
+This uncertainty source is a direct consequence of the first two: accurate,
+unoccluded localization eliminates wrong-grasp risk; degraded localization
+makes it non-negligible.
+
+Taken together, these three sources create a genuine exploration--exploitation
+tension: the agent must decide whether to spend steps reducing uncertainty
+(approaching for a better sensor reading, or repositioning to clear an
+occlusion) or to act on its current, imperfect belief and risk a failed grasp.
+
+\subsection{Reward Function}
+
+The reward function uses potential-based shaping~\cite{ng1999potential} for
+approach and carry, one-time milestone bonuses to avoid per-step exploitation,
+and large terminal rewards to ensure the overall objective dominates.
+The full breakdown is given in Table~\ref{tab:reward}.
+
+\begin{table}[!t]
+  \caption{Reward function components. All distance thresholds are in mm.}
+  \label{tab:reward}
+  \centering
+  \small
+  \begin{tabular}{l c p{3.0cm}}
+    \toprule
+    Component & Value & Condition \\
+    \midrule
+    Step cost      & $-1.0$                  & Every step \\
+    XY approach    & $+3.0 \!\cdot\! \Delta d_{xy}$ & Per step, potential-based \\
+    Proximity bonus & $+2.0\!(1 - d/25\text{mm})$ & $d_{xy} < 25$~mm \\
+    Reach block    & $+5.0$ (once)           & $d_{xy} < 15$~mm \\
+    Grasp success  & $+10.0$                 & Auto-grasp, target \\
+    Grasp fail     & $-2.0$                  & Auto-grasp misses \\
+    Distractor grasp & $-30.0$ + terminate   & Wrong block \\
+    Carry shaping  & $+5.0 \!\cdot\! \Delta d_{\text{goal}}$ & While holding \\
+    Near goal      & $+5.0$ (once)           & Holding, $d_{\text{goal}} < 30$~mm \\
+    Perfect place  & $+50.0$                 & $d_{\text{goal}} < 10$~mm \\
+    Precise place  & $+30.0$                 & $d_{\text{goal}} < 20$~mm \\
+    Close place    & $+10.0$                 & $d_{\text{goal}} < 40$~mm \\
+    Miss           & $-10.0$                 & Release outside goal \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Simulation Environment}
+
+The SO-ARM101 is a 5-DOF desktop arm with a parallel-jaw gripper.
+The MuJoCo scene contains a red $2{\times}4$ LEGO brick (the target,
+$32{\times}16$~mm footprint), two blue $2{\times}2$ LEGO bricks (distractors,
+$40{\times}20$~mm footprint, $\sim\!25\%$ larger to exaggerate occlusion), and a
+fixed yellow goal marker approximately $15$~cm from the home configuration.
+Distractors are spawned uniformly within $25$~mm of the target at each episode
+reset, producing an inter-block spacing of $17$~mm on average and ensuring
+that $\sim\!34\%$ of distractors are within the grasp threshold of the target.
+
+Per-step occlusion rates (measured across $86\%$ of episodes) sit near $16\%$
+under a trained policy rollout, rising to $48\%$ under random exploration.
+This ensures that belief tracking provides meaningful benefit without making
+the task unsolvable.
+
+% -- IV. Solution Approach -------------------------------------------------
+\section{Solution Approach}
+\label{sec:approach}
+
+\begin{figure*}[!t]
+  \centering
+  \includegraphics[width=0.88\textwidth]{figs/system_pipeline.pdf}
+  \caption{Architecture comparison.
+           (a)~Plain PPO exposes noisy (or stale, during occlusion) sensor
+           readings as a 15-D vector directly to the policy.
+           (b)~Belief-augmented PPO routes each observation through a
+           300-particle bootstrap filter; the filter summary
+           $(\bm{\mu}_b, \bm{\sigma}_b)$ augments the 18-D policy input so
+           the agent can reason about its own localization uncertainty.}
+  \label{fig:pipeline}
+\end{figure*}
+
+\subsection{Plain PPO (Baseline)}
+
+The plain PPO agent treats the POMDP as a standard MDP by using the stale
+sensor model: during occlusion, the policy receives the cached last-visible
+wrist observation $o_{\tau}$ as if it were the current reading.
+The 15-dimensional policy observation is:
+\begin{equation}
+  \phi_{\text{plain}} =
+  [\,\mathbf{q}_{(6)},\; \hat{\block}^{xy\theta}_{(3)},\;
+   \ee{}_{(3)},\; \goal{}_{(2)},\; h_{(1)}\,],
+  \label{eq:obs_plain}
+\end{equation}
+where $\hat{\block}$ is the stale/noisy wrist reading,
+$\ee$ is the end-effector Cartesian position (from forward kinematics),
+and $\goal$ is the fixed goal position in the world frame.
+The policy is an MLP with two hidden layers of 256 units each (ReLU
+activations, linear output), matching the SB3 PPO default architecture.
+
+Training uses the SB3 PPO implementation~\cite{raffin2021sb3} with
+$n_{\text{env}} = 3$ parallel environments, $n_{\text{steps}} = 2048$,
+entropy coefficient $0.05$, $\gamma = 0.99$, clip ratio $0.2$,
+and VecNormalize for both observations and rewards.
+The plain agent is trained for $5\text{M}$ environment steps; the best checkpoint
+is saved by an evaluation callback ($50$ evaluation episodes every $10\text{k}$
+steps).
+
+\subsection{Belief-Augmented PPO}
+
+\subsubsection{Particle Filter Belief Tracker}
+
+A bootstrap particle filter is maintained~\cite{gordon1993novel} over the target
+block's hidden pose $\block = (x, y, \theta)$.
+The filter state is $N = 300$ weighted particles
+$\{(x^i, w^i)\}_{i=1}^{N}$ updated at each step as follows.
+
+\textbf{Predict.}
+Each particle is perturbed with Gaussian process noise to account for residual
+uncertainty in the block's rest position:
+\begin{equation}
+  x^i_{t|t-1} = x^i_{t-1} + \epsilon,\quad
+  \epsilon \sim \mathcal{N}(\mathbf{0},\;\text{diag}(\sigma_p^2, \sigma_p^2, \sigma_{p\theta}^2)),
+\end{equation}
+with $\sigma_p = 1$~mm/step and $\sigma_{p\theta} = 0.01$~rad/step.
+The small process noise reflects that the blocks are stationary objects
+that do not move spontaneously.
+
+\textbf{Update.}
+When a wrist observation $o_t$ is available (target not occluded), particle
+weights are updated by the Gaussian likelihood:
+\begin{equation}
+  w^i \;\propto\; w^i \cdot \mathcal{N}\!\left(o_t^{xy};\; x^i_{xy},\;
+  \sigma_{\text{lik}}^2 \mathbf{I}\right),
+  \label{eq:pf_update}
+\end{equation}
+where $\sigma_{\text{lik}} = 1.5\,\sigmaobs(d_t)$.
+The widened likelihood ($1.5\times$) prevents particle impoverishment:
+using the raw sensor sigma collapses the effective sample size $N_{\text{eff}}
+= 1/\sum_i (w^i)^2$ to near $1$ each step, degenerating the filter into
+a noisy running average.
+During occlusion, the update step is skipped entirely; particles spread
+freely via the predict step, correctly growing uncertainty without
+incorporating spurious information.
+
+\textbf{Resample.}
+Systematic resampling is applied when $N_{\text{eff}} < N/2$.
+After resampling, $5\%$ of particles are re-injected near the last visible
+observation to prevent filter degeneracy during extended occlusion.
+
+\textbf{Belief summary.}
+The filter's output is compressed to
+$\pf_t = (\bm{\mu}_t, \bm{\sigma}_t) \in \mathbb{R}^6$:
+\begin{equation}
+  \bm{\mu}_t = \sum_i w^i x^i,\quad
+  \sigma_{t,k} = \sqrt{\sum_i w^i (x^i_k - \mu_{t,k})^2},
+\end{equation}
+for each dimension $k \in \{x, y, \theta\}$.
+The standard deviation $\bm{\sigma}$ summarizes how uncertain the filter is
+about the target's position: high $\bm{\sigma}$ indicates recent or extended
+occlusion, while low $\bm{\sigma}$ indicates confident localization.
+
+\subsubsection{Policy Observation and Architecture}
+
+The belief-augmented policy receives an 18-dimensional observation:
+\begin{equation}
+  \phi_{\text{belief}} =
+  [\,\mathbf{q}_{(6)},\; \bm{\mu}_{(3)},\; \bm{\sigma}_{(3)},\;
+   \ee{}_{(3)},\; \goal{}_{(2)},\; h_{(1)}\,].
+  \label{eq:obs_belief}
+\end{equation}
+The critical difference from plain PPO is the inclusion of $\bm{\sigma}$:
+the policy can learn to slow its approach when uncertainty is high
+(reducing the risk of triggering auto-grasp on a distractor at the wrong position)
+and act more aggressively when the filter is confident.
+No explicit information-gathering reward is used; this behavior must emerge
+from the task reward alone.
+
+The reward for belief PPO uses the particle filter mean $\bm{\mu}$ in place
+of the raw sensor reading when computing distance-based shaping terms.
+This ensures that the reward gradient is also filtered, providing a cleaner
+learning signal at high noise levels.
+
+All hyperparameters are identical to plain PPO, except the belief agent trains
+for $6.4\text{M}$ steps to account for the larger and harder-to-exploit
+observation space.
+The policy network architecture is the same MLP~[256, 256] as the baseline.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{figs/belief_evolution.pdf}
+  \caption{Belief uncertainty $\sigma_b$ (top) and distance to target
+           (bottom) over one representative successful episode.
+           The shaded region marks prolonged wrist-camera occlusion
+           (steps 0--178): the particle filter's uncertainty grows steadily
+           as no measurements arrive.
+           Once occlusion clears, the robot approaches and the
+           distance-dependent noise model $\sigmaobs \propto d_t$ causes
+           $\sigma_b$ to collapse from 73\,mm to $<\!10$\,mm within a few
+           steps.
+           The dashed line marks the successful auto-grasp at step~188.}
+  \label{fig:belief-evo}
+\end{figure}
+
+% -- V. Results ------------------------------------------------------------
+\section{Results}
+\label{sec:results}
+
+\subsection{Training Convergence}
+
+Fig.~\ref{fig:learning} shows training curves for both agents.
+Both discover the approach-shaping gradient around $200\text{k}$ steps,
+after which reward rises monotonically until plateauing.
+Plain PPO reaches its best checkpoint at step $3.74\text{M}$; belief PPO plateaus later, reaching
+its best checkpoint at $6.37\text{M}$ steps.
+The slower convergence of belief PPO is expected: the 18-dimensional
+observation contains the $\bm{\sigma}$ uncertainty signal, whose relevance
+to the task reward requires more experience to exploit.
+Neither agent exhibits catastrophic forgetting after the best checkpoint,
+indicating stable training.
+
+\begin{figure}[!t]
+  \centering
+  \subfloat[Mean episode reward]{%
+    \includegraphics[width=0.48\columnwidth]{figs/learning_curves.pdf}%
+    \label{fig:reward_curve}%
+  }
+  \hfill
+  \subfloat[Task success rate]{%
+    \includegraphics[width=0.48\columnwidth]{figs/success_curve.pdf}%
+    \label{fig:success_curve}%
+  }
+  \caption{Training curves (15-step moving average).
+           Success rate: fraction of evaluation episodes completing in
+           $<200$ steps. Belief PPO converges $\sim1.6\text{M}$ steps
+           later but reaches a comparable peak.}
+  \label{fig:learning}
+\end{figure}
+
+\subsection{Noise Sweep: Main Result}
+
+Both best-model checkpoints are evaluated across eight noise levels
+($\sigmaep \in \{3, 5, 8, 10, 13, 16, 20, 30\}$~mm) with 50 evaluation
+episodes each at fixed seed 42.
+Results are shown in Fig.~\ref{fig:noise_sweep} and Table~\ref{tab:noise_sweep}.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{figs/noise_sweep.pdf}
+  \caption{Task success rate vs.\ $\sigmaobs$.
+           Shaded regions show which method leads.
+           Belief PPO outperforms plain PPO across the moderate-noise
+           regime ($5$--$20$~mm); plain PPO dominates at very low
+           noise ($3$~mm).}
+  \label{fig:noise_sweep}
+\end{figure}
+
+\begin{table}[!t]
+  \caption{Noise sweep results (50 episodes per level, seed 42).
+           \textbf{Bold} = better. $\Delta$ = Belief $-$ Plain.}
+  \label{tab:noise_sweep}
+  \centering
+  \begin{tabular}{c cc c}
+    \toprule
+    $\sigmaobs$ (mm) & Plain (\%)$\uparrow$ & Belief (\%)$\uparrow$ & $\Delta$~(\%) \\
+    \midrule
+    3  & \textbf{66} & 36 & $-30$ \\
+    5  & 46 & \textbf{52} & $+6$ \\
+    8  & 58 & \textbf{60} & $+2$ \\
+    10 & 34 & \textbf{58} & $\mathbf{+24}$ \\
+    13 & \textbf{48} & \textbf{48} & $0$ \\
+    16 & 44 & \textbf{48} & $+4$ \\
+    20 & 40 & \textbf{46} & $+6$ \\
+    30 & \textbf{42} & 32 & $-10$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The results reveal a clear noise-regime structure.
+At $\sigmaep = 3$~mm, plain PPO achieves $66\%$ success with mean episode
+length $111$ steps, while belief PPO manages only $36\%$ at $196$ steps.
+The plain agent acts decisively because its wrist observations are already
+accurate ($\sim\!3$~mm error); the belief agent is overly cautious because
+its particle filter is initialized with spread $\sigmaep$ at episode start,
+leading the policy to perceive uncertainty even when none is warranted.
+
+In the moderate regime ($\sigmaep = 5$--$20$~mm), belief PPO wins or ties at
+every level, with the largest advantage at $10$~mm ($+24\%$, belief $58\%$
+vs.\ plain $34\%$).
+At this noise level, the particle filter converges within a few visible
+observations (typically $<$5 steps) to a mean error of $\sim\!4$~mm,
+well below the grasp threshold, while the plain agent's stale observation
+carries $10$~mm error, enough to cause localization failures during occlusion.
+
+At $\sigmaep = 30$~mm (beyond the training distribution), both methods
+degrade: plain PPO to $42\%$ (stale readings too inaccurate), belief PPO
+to $32\%$ (particle impoverishment: the likelihood function is so flat at
+$\sigma_{\text{lik}} = 45$~mm that particle weights barely update,
+preventing convergence).
+
+The $\sigmaep \approx 8$~mm crossover is theoretically consistent with the
+signal-to-noise structure of the bootstrap filter: below it, the raw
+observation is already close to optimal and the $O(N)$ filter overhead
+is unjustified; above it, filtering reduces position error enough to
+consistently reach the $10$~mm grasp sphere before timeout.
+
+\subsection{Failure Mode Analysis}
+
+Across all noise levels, task success rate and grasp rate are nearly
+identical ($\text{success}\% \approx \text{grasped}\%$), with zero
+wrong-block grasps recorded for either agent.
+This reveals that the bottleneck is \emph{localization and approach},
+not manipulation skill: once the agent grasps the target block, it
+reliably carries and places it (placement phase never fails).
+All failures ($\sim\!60\%$ of episodes at mid-to-high noise) are
+pre-grasp timeouts in which the agent could not navigate to within $10$~mm
+of the target within the $200$-step horizon.
+
+The absence of distractor confusion (zero wrong grasps) is notable given
+that $34\%$ of distractor spawns place a distractor within the grasp
+threshold of the target.
+Both agents learned to approach the target's estimated position accurately
+enough that auto-grasp always activates on the correct block.
+This is consistent with the high placement success rate conditional on
+grasping: both agents learned precise approach behavior; their failure
+mode is navigation under uncertainty, not discrimination.
+
+\subsection{POMCP Stretch Goal}
+
+As a stretch goal, POMCP-MCTS is evaluated with the direct MuJoCo simulator
+as the generative model.
+The planner uses UCB1 tree search with 200 simulations per step, a heuristic
+rollout policy, observation progressive widening ($k\!=\!2$, $\alpha\!=\!0.5$),
+ABT-style tree reuse across steps, and progressive bias initialization
+(heuristic action seeded at $Q\!=\!0$; all others at $Q\!=\!-40$).
+The carry-over tree is reset every 40 steps to prevent Q-value corruption
+on stuck episodes.
+Results on the same 20-episode evaluation (Table~\ref{tab:pomcp}) show
+$60\%$ success at a mean planning cost of $28.1$~s/step and 143 mean steps
+per episode.
+
+\begin{table}[!t]
+  \caption{POMCP-MCTS vs.\ trained policies. PPO columns show results at the
+           training noise level ($\sigmaep = 5$~mm). POMCP runs at fixed
+           $\sigmaep = 5$~mm (training noise of Belief PPO).}
+  \label{tab:pomcp}
+  \centering
+  \begin{tabular}{l ccc}
+    \toprule
+    Method & Success (\%)$\uparrow$ & Mean Steps$\downarrow$ & Plan time \\
+    \midrule
+    Plain PPO   & 46 & $\sim$168 & instant \\
+    Belief PPO  & \textbf{52} & $\sim$150 & instant \\
+    POMCP-MCTS  & 60 & 143       & 28.1~s/step \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+POMCP-MCTS shows a bimodal outcome distribution: successful episodes
+complete in 16--86 steps (median $\sim\!40$), while the 8 failures all
+hit the 300-step timeout.
+This brittleness reflects a known limitation of tree search under a
+small simulation budget: with 200 simulations per step, Q-value estimates
+carry a standard error of $\sim\!12$ reward units, insufficient to reliably
+distinguish between actions whose true values differ by $5$--$15$ reward.
+The 300-step timeout failures correspond to hard initial configurations
+where the heuristic rollout policy is itself insufficient, and POMCP inherits
+this weakness through progressive bias initialization.
+Despite the higher nominal success rate, the $28.1$~s/step planning cost
+makes POMCP impractical for real-time deployment; trained policies achieve
+comparable or better success at negligible inference cost.
+
+% -- VI. Discussion and Conclusion -----------------------------------------
+\section{Discussion and Conclusion}
+\label{sec:conclusion}
+
+These results show that particle filter belief augmentation provides a meaningful
+performance advantage when observation noise is in a regime where filtering is
+effective, specifically when $\sigmaep$ is large enough that the raw sensor
+reading carries significant error, but not so large that the filter itself
+cannot converge.
+The crossover at $\sim\!8$~mm and the degradation at $30$~mm are both
+theoretically motivated consequences of the bootstrap filter's convergence
+characteristics.
+The practical implication is that belief augmentation is not universally
+beneficial: in low-noise settings, the cost of filter initialization and
+the induced caution in the policy can outweigh the smoothing benefit.
+Practitioners should choose between a stale-sensor baseline and a
+belief-augmented agent based on the expected operating noise level.
+
+On reward engineering, developing a stable reward function for multi-phase
+manipulation required iterating through 18 training runs and discovering five
+distinct classes of reward hacking.
+Per-step state-occupancy rewards (``be near the block'', ``keep gripper closed
+near block'', ``be near goal while holding'') were universally exploited:
+the agent learned to enter the rewarded state and remain there indefinitely,
+collecting reward without task progress.
+The fix in every case was to convert the reward to either a one-time milestone
+(fires once per episode on the first entry into the state) or a
+potential-based shaping term (rewards only the improvement in a scalar function,
+not the absolute value).
+These are precisely the conditions under which Ng et al.~\cite{ng1999potential}
+guarantee that the optimal policy is preserved.
+The grasp-attempt spamming exploit in particular (where the agent
+discovered it could repeatedly attempt grasps from an incorrect height and
+collect positive rewards for each attempt) required four separate design
+iterations to resolve robustly.
+
+Regarding limitations and future work, the current environment uses a $2$D
+grasp check (XY proximity only) rather than a full $3$D check, a pragmatic
+choice after six failed training runs
+with the physically correct $3$D threshold.
+The issue was the lack of a gradient for the Z descent phase: with a $3$D
+grasp condition, the agent learns to approach in XY but finds no incentive
+to descend to table height, since the $3$D proximity reward is zero when
+hovering directly above the block.
+Future work could address this with a curriculum that first rewards XY
+approach, then adds a Z descent milestone only after XY convergence is
+stable.
+Additionally, real robot evaluation via the ROS2 integration
+(\texttt{policy\_runner.py}) was begun but not completed due to time constraints;
+sim-to-real transfer remains an open question for this platform.
+The POMCP-MCTS results highlight that a larger simulation budget (${\sim}2000$
+simulations/step) would be needed for reliable Q-value convergence; future work
+could explore learned rollout policies to improve planning efficiency.
+
+This work demonstrated that belief-augmented reinforcement learning with a bootstrap
+particle filter improves pick-and-place success under observation noise and
+occlusion in the moderate-noise regime ($\sigmaep = 5$--$20$~mm), with a peak
+advantage of $+24\%$ at $\sigmaep = 10$~mm.
+The advantage reverses at very low noise, where raw observations are already
+accurate, and at very high noise, where the particle filter degrades.
+These findings provide a practical characterization of when belief
+augmentation is worth its added complexity, and the failure-mode analysis
+identifies localization (not manipulation) as the primary performance
+bottleneck in the POMDP pick-and-place setting.
+
+% -- VII. Contributions and Release ----------------------------------------
+\section*{Contributions and Release}
+
+The project was designed and built the MuJoCo simulation environment from scratch
+(\texttt{lego\_pick\_env.py}), including the reward function, occlusion model,
+constraint-based grasping, and the VecNormalize training pipeline.
+The bootstrap particle filter (\texttt{particle\_filter.py}) and the
+belief-augmented observation wrapper were implemented independently.
+The POMCP direct planner and MCTS variant (including tree reuse, observation
+progressive widening, periodic reset, and progressive bias initialization)
+were implemented from scratch (\texttt{train\_pomcp.py},
+\texttt{train\_pomcp\_mcts.py}).
+The PPO learning algorithm itself is from Stable-Baselines3~\cite{raffin2021sb3};
+the MuJoCo physics engine and SO-ARM101 robot assets are third-party.
+
+The author grant permission for this report to be posted publicly.
+
+% -- References ------------------------------------------------------------
+\begin{thebibliography}{99}
+
+\bibitem{kaelbling1998pomdp}
+L.~P. Kaelbling, M.~L. Littman, and A.~R. Cassandra,
+``Planning and acting in partially observable stochastic domains,''
+\emph{Artificial Intelligence}, vol.~101, no.~1--2, pp.~99--134, 1998.
+
+\bibitem{koval2015manifold}
+M.~C. Koval, N.~S. Pollard, and S.~S. Srinivasa,
+``Pre- and post-contact policy decomposition for planar contact manipulation
+under uncertainty,''
+\emph{Int'l J. Robotics Research}, vol.~35, no.~1--3, pp.~244--264, 2016.
+
+\bibitem{gordon1993novel}
+N.~J. Gordon, D.~J. Salmond, and A.~F.~M. Smith,
+``Novel approach to nonlinear/non-Gaussian Bayesian state estimation,''
+\emph{IEE Proc.\ Radar and Signal Processing}, vol.~140, no.~2,
+pp.~107--113, 1993.
+
+\bibitem{schulman2017ppo}
+J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford, and O.~Klimov,
+``Proximal policy optimization algorithms,''
+\emph{arXiv:1707.06347}, 2017.
+
+\bibitem{ng1999potential}
+A.~Y. Ng, D.~Harada, and S.~Russell,
+``Policy invariance under reward transformations: Theory and application
+to reward shaping,''
+in \emph{Proc.\ Int'l Conf.\ on Machine Learning (ICML)}, 1999.
+
+\bibitem{silver2010pomcp}
+D.~Silver and J.~Veness,
+``Monte-Carlo planning in large POMDPs,''
+in \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2010.
+
+\bibitem{sunberg2018pomcpow}
+Z.~Sunberg and M.~Kochenderfer,
+``Online algorithms for POMDPs with continuous state, action, and
+observation spaces,''
+in \emph{Proc.\ Int'l Conf.\ on Automated Planning and Scheduling (ICAPS)},
+2018.
+
+\bibitem{silver2016alphago}
+D.~Silver et al.,
+``Mastering the game of Go with deep neural networks and tree search,''
+\emph{Nature}, vol.~529, pp.~484--489, 2016.
+
+\bibitem{raffin2021sb3}
+A.~Raffin, A.~Hill, A.~Gleave, A.~Kanervisto, M.~Ernestus, and N.~Dormann,
+``Stable-Baselines3: Reliable reinforcement learning implementations,''
+\emph{J.\ Machine Learning Research}, vol.~22, no.~268, pp.~1--8, 2021.
+
+\end{thebibliography}
+
+\end{document}

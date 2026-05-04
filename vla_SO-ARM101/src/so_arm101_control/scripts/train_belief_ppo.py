@@ -64,7 +64,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--eval-freq", type=int, default=10_000)
     parser.add_argument("--eval-episodes", type=int, default=50)
-    parser.add_argument("--camera-noise", action="store_true")
+    parser.add_argument("--camera-noise", action="store_true", default=True)
     parser.add_argument("--output-dir", type=str, default="./models/ppo_belief")
     parser.add_argument("--log-dir", type=str, default="./logs/ppo_belief")
     args = parser.parse_args()

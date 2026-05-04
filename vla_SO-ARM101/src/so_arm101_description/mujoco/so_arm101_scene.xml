@@ -13,7 +13,6 @@
     <material name="ground_mat" texture="grid_tex"
               texrepeat="10 10" reflectance="0.1"/>
     <material name="red_lego" rgba="0.9 0.1 0.1 1"/>
-    <material name="green_lego" rgba="0.1 0.8 0.1 1"/>
     <material name="blue_lego" rgba="0.1 0.1 0.9 1"/>
   </asset>
 
@@ -38,13 +37,8 @@
           material="ground_mat" friction="1.0 1.0 0.001"/>
 
     <!--
-      LEGO bricks on the ground plane in front of the SO-ARM101.
-      Free bodies with collision — can be pushed, tipped, and grasped.
-      Repositioned at runtime via /mujoco/set_body_pose (writes qpos).
-      Ground truth positions (world frame):
-        red_lego_2x4:   (0.18,  0.03, 0.0055) yaw=0.8   size=32x16x11mm
-        green_lego_2x3: (0.20,  0.06, 0.0055) yaw=-0.4  size=24x16x11mm
-        blue_lego_2x2:  (0.22,  0.03, 0.0055) yaw=0.0   size=16x16x11mm
+      LEGO bricks managed by LegoPickEnv: red target + 2 blue distractors.
+      Positions are randomized at reset; XML defaults are just fallbacks.
     -->
 
     <!-- Red lego 2x4: 32x16x11mm (mass inflated for stable contact) -->
@@ -56,20 +50,20 @@
             friction="1.0 0.5 0.001" solref="0.01 1" solimp="0.9 0.95 0.001"/>
     </body>
 
-    <!-- Green lego 2x3: 24x16x11mm -->
-    <body name="green_lego_2x3"
-          pos="0.20 0.06 0.0055" quat="0.9801 0 0 -0.1987">
-      <freejoint name="green_lego_2x3_jnt"/>
-      <geom type="box" size="0.012 0.008 0.0055"
-            material="green_lego" contype="1" conaffinity="1" mass="0.05"
+    <!-- Blue lego distractor: 64x32x33mm — 3x taller than red for wrist-camera occlusion -->
+    <body name="blue_lego_2x2"
+          pos="0.22 0.03 0.0165" quat="1 0 0 0">
+      <freejoint name="blue_lego_2x2_jnt"/>
+      <geom type="box" size="0.032 0.016 0.0165"
+            material="blue_lego" contype="1" conaffinity="1" mass="0.05"
             friction="1.0 0.5 0.001" solref="0.01 1" solimp="0.9 0.95 0.001"/>
     </body>
 
-    <!-- Blue lego 2x2: 16x16x11mm -->
-    <body name="blue_lego_2x2"
-          pos="0.22 0.03 0.0055" quat="1 0 0 0">
-      <freejoint name="blue_lego_2x2_jnt"/>
-      <geom type="box" size="0.008 0.008 0.0055"
+    <!-- Blue lego distractor b: 64x32x33mm — second tall distractor -->
+    <body name="blue_lego_2x2_b"
+          pos="0.24 -0.03 0.0165" quat="1 0 0 0">
+      <freejoint name="blue_lego_2x2_b_jnt"/>
+      <geom type="box" size="0.032 0.016 0.0165"
             material="blue_lego" contype="1" conaffinity="1" mass="0.05"
             friction="1.0 0.5 0.001" solref="0.01 1" solimp="0.9 0.95 0.001"/>
     </body>

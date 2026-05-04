@@ -31,11 +31,11 @@ class ParticleFilter:
 
     def __init__(
         self,
-        n_particles=300,
+        n_particles=500,
         n_blocks=1,
-        process_noise_xy=0.001,
-        process_noise_theta=0.01,
-        injection_ratio=0.05,
+        process_noise_xy=0.0005,
+        process_noise_theta=0.005,
+        injection_ratio=0.15,
         likelihood_scale=1.5,
     ):
         """

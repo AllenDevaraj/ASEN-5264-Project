@@ -4,3 +4,4 @@ build/
 install/
 log/
 /.claude/
+src/so_arm101_control/scripts/logs/

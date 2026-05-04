@@ -564,8 +564,12 @@ class MujocoSimNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = MujocoSimNode()
+    # MultiThreadedExecutor: prevents the 1kHz physics timer from starving
+    # the /joint_states subscriber callback (which otherwise updates at ~1Hz).
+    executor = rclpy.executors.MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

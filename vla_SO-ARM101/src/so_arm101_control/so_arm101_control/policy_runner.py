@@ -29,12 +29,12 @@ from so_arm101_control.particle_filter import ParticleFilter
 
 # Constants matching lego_pick_env.py
 TARGET_BLOCK = "red_lego_2x4"
-DISTRACTOR_BLOCKS = ["blue_lego_2x2", "green_lego_2x3"]
+DISTRACTOR_BLOCKS = ["blue_lego_2x2", "blue_lego_2x2_b"]
 BLOCK_NAMES = [TARGET_BLOCK] + DISTRACTOR_BLOCKS
 HALF_SIZES = {
     "red_lego_2x4":   (0.016, 0.008),
-    "blue_lego_2x2":  (0.032, 0.016),  # 64x32mm — doubled x2 for prominent occlusion
-    "green_lego_2x3": (0.012, 0.008),
+    "blue_lego_2x2":  (0.020, 0.010),
+    "blue_lego_2x2_b": (0.020, 0.010),
 }
 TABLE_Z = 0.0055
 MIN_SPACING = 0.03

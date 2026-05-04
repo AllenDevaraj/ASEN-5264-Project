@@ -56,7 +56,7 @@ def _project_to_camera(world_pos, camera_pos, camera_rot):
     return u, v, v_cv[2]
 
 
-def _project_block_bbox(block_xy, block_half_size, block_yaw, table_z,
+def _project_block_bbox(block_xy, block_half_size, block_yaw, project_z,
                         camera_pos, camera_rot):
     """Project a block's 4 corners to camera pixel coordinates.
 
@@ -78,7 +78,7 @@ def _project_block_bbox(block_xy, block_half_size, block_yaw, table_z,
     depths = []
     for cx, cy_val in corners_world:
         result = _project_to_camera(
-            np.array([cx, cy_val, table_z]),
+            np.array([cx, cy_val, project_z]),
             camera_pos, camera_rot
         )
         if result is None:
@@ -102,7 +102,9 @@ def _bboxes_overlap(bbox1, bbox2):
 
 def is_occluded(target_pos, target_half_size, target_yaw,
                 occluder_pos, occluder_half_size, occluder_yaw,
-                camera_pos, camera_rot, table_z=0.0055):
+                camera_pos, camera_rot,
+                target_half_z=0.0055,
+                occluder_half_z=0.0055):
     """Check if target block is occluded by occluder block from camera viewpoint.
 
     Args:
@@ -114,17 +116,20 @@ def is_occluded(target_pos, target_half_size, target_yaw,
         occluder_yaw: Yaw angle of occluder block.
         camera_pos: (3,) camera position in world.
         camera_rot: (3, 3) rotation matrix of camera_link body.
-        table_z: Height of table surface.
+        target_half_z: Half-height of target block (projects at top face).
+        occluder_half_z: Half-height of occluder block (projects at top face).
 
     Returns:
         True if target is occluded by occluder.
     """
     target_proj = _project_block_bbox(
-        np.asarray(target_pos), target_half_size, target_yaw, table_z,
+        np.asarray(target_pos), target_half_size, target_yaw,
+        target_half_z * 2,
         camera_pos, camera_rot
     )
     occluder_proj = _project_block_bbox(
-        np.asarray(occluder_pos), occluder_half_size, occluder_yaw, table_z,
+        np.asarray(occluder_pos), occluder_half_size, occluder_yaw,
+        occluder_half_z * 2,
         camera_pos, camera_rot
     )
 

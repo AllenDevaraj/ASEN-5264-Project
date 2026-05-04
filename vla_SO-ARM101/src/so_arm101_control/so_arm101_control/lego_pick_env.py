@@ -56,9 +56,17 @@ HALF_SIZES = {
     "blue_lego_2x2_c":  (0.020, 0.010),  # 40x20mm — third blue occluder
 }
 
+# Half-heights (Z) for each block — used for occlusion projection at top face
+BLOCK_HALF_Z = {
+    "red_lego_2x4":    0.0055,   # 11mm full height
+    "blue_lego_2x2":   0.0165,   # 33mm full height (3x red — tall enough for wrist-camera occlusion)
+    "blue_lego_2x2_b": 0.0165,
+    "blue_lego_2x2_c": 0.0165,
+}
+
 TABLE_Z = 0.0055
-MIN_SPACING = 0.010         # 10mm min spacing
-DISTRACTOR_NEAR_TARGET_RADIUS = 0.035  # distractors spawn within 35mm of target
+MIN_SPACING = 0.050         # 50mm min center-to-center (covers blue-blue worst-case ~45mm + buffer)
+DISTRACTOR_NEAR_TARGET_RADIUS = 0.090  # distractors spawn within 90mm of target (must be > MIN_SPACING)
 
 # Workspace bounds for block spawning (within arm reach)
 SPAWN_R_MIN = 0.12
@@ -151,15 +159,14 @@ class LegoPickEnv(gym.Env):
         )
 
         # Observation layout:
-        #   Plain:  15D [joints(6), stale_wrist(3),           ee(3), goal(2), holding(1)]
-        #   Belief: 18D [joints(6), pf_mu(3), pf_sigma(3),    ee(3), goal(2), holding(1)]
-        # Full sigma (x, y, theta uncertainty) matches the original design.
+        #   Plain:  16D [joints(6), stale_wrist(3),           ee(3), goal(2), holding(1), occluded(1)]
+        #   Belief: 19D [joints(6), pf_mu(3), pf_sigma(3),    ee(3), goal(2), holding(1), occluded(1)]
         if self.belief_mode:
-            obs_dim = 18
+            obs_dim = 19
         elif self.use_overhead_camera:
-            obs_dim = 18
+            obs_dim = 19
         else:
-            obs_dim = 15
+            obs_dim = 16
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -235,7 +242,7 @@ class LegoPickEnv(gym.Env):
         self._step_noisy_obs = self._last_wrist_obs.copy()
         if self.belief_mode:
             noisy_obs = self._last_wrist_obs.copy()
-            self.pf.reset(noisy_obs.reshape(1, 3), sigma_init=min(self._sigma_ep * 3, 0.04))
+            self.pf.reset(noisy_obs.reshape(1, 3), sigma_init=min(self._sigma_ep * 4, 0.05))
             if self.use_overhead_camera:
                 overhead_obs = self._get_overhead_visible_observations()
                 if overhead_obs:
@@ -327,7 +334,7 @@ class LegoPickEnv(gym.Env):
         # accurate gradient because PF mean is closer to true than raw noisy obs.
         # Grasp and placement checks still use true physics state.
         if self.belief_mode:
-            _mu, _ = self.pf.get_belief()
+            _mu, _sigma = self.pf.get_belief()
             obs_block_xy = _mu[0, :2]
         elif self._is_target_occluded():
             obs_block_xy = self._last_wrist_obs[:2]
@@ -345,6 +352,17 @@ class LegoPickEnv(gym.Env):
         if not self._holding_block:
             # --- PHASE 1: Approach the block in XY ---
             reward = -1.0  # step cost
+
+            # Sigma-reduction reward: incentivise belief convergence before grasping.
+            # Only fires in belief mode when uncertainty is still high (sigma > 5mm).
+            if self.belief_mode and self._prev_belief_sigma is not None:
+                cur_sigma_xy = float(np.mean(_sigma[0, :2]))
+                prev_sigma_xy = float(np.mean(self._prev_belief_sigma[:2]))
+                sigma_reduction = prev_sigma_xy - cur_sigma_xy
+                if sigma_reduction > 0 and cur_sigma_xy > 0.005:
+                    reward += 1.0 * np.clip(sigma_reduction / 0.005, 0.0, 1.0)
+            if self.belief_mode:
+                self._prev_belief_sigma = _sigma[0].copy()
 
             # XY approach shaping
             if self._prev_dist_to_block is not None:
@@ -574,7 +592,7 @@ class LegoPickEnv(gym.Env):
         for i, name in enumerate(BLOCK_NAMES):
             x, y, yaw = positions[i]
             self._block_true_poses[name] = (x, y, yaw)
-            self._set_block_pose(name, x, y, TABLE_Z, yaw)
+            self._set_block_pose(name, x, y, BLOCK_HALF_Z[name], yaw)
 
     def _sample_table_position(self):
         """Sample a goal position on the table, away from blocks."""
@@ -664,6 +682,8 @@ class LegoPickEnv(gym.Env):
                 occluder_yaw=distractor[2],
                 camera_pos=cam_pos,
                 camera_rot=cam_rot,
+                target_half_z=BLOCK_HALF_Z[TARGET_BLOCK],
+                occluder_half_z=BLOCK_HALF_Z[d_name],
             ):
                 return True
         return False
@@ -718,7 +738,7 @@ class LegoPickEnv(gym.Env):
             if name not in self._block_true_poses:
                 continue
             pose = self._block_true_poses[name]
-            block_pos = np.array([pose[0], pose[1], TABLE_Z])
+            block_pos = np.array([pose[0], pose[1], BLOCK_HALF_Z[name]])
             dist_xy = np.linalg.norm(self._ee_pos[:2] - block_pos[:2])
             if dist_xy < GRASP_THRESHOLD and dist_xy < closest_dist:
                 closest_dist = dist_xy
@@ -726,7 +746,7 @@ class LegoPickEnv(gym.Env):
 
         if closest_name is not None:
             pose = self._block_true_poses[closest_name]
-            block_pos = np.array([pose[0], pose[1], TABLE_Z])
+            block_pos = np.array([pose[0], pose[1], BLOCK_HALF_Z[closest_name]])
             self._grasp_offset = block_pos - self._ee_pos
             return closest_name
         return None
@@ -776,15 +796,17 @@ class LegoPickEnv(gym.Env):
         )
 
     def _build_observation(self):
-        """Construct 18D observation vector.
+        """Construct observation vector.
 
         Layout:
           [0:6]   joint angles + gripper
           [6:9]   block obs (wrist noisy / PF mu)
-          [9:12]  block obs (overhead noisy / PF sigma)
+          [9:12]  block obs (overhead noisy / PF sigma)  — belief/overhead only
           [12:15] end-effector position (x, y, z)
           [15:17] goal position (x, y)
           [17]    holding flag (0 or 1)
+          [18]    wrist occluded flag (1.0 = block not visible, 0.0 = visible)
+        Plain mode offsets shift by -3 (no overhead/sigma slot).
         """
         joint_obs = []
         for name in ARM_JOINT_NAMES:
@@ -798,22 +820,22 @@ class LegoPickEnv(gym.Env):
         ee_obs = self._ee_pos.tolist()
         goal_obs = self._goal_pos.tolist()
         holding_obs = [1.0 if self._holding_block == TARGET_BLOCK else 0.0]
+        occluded_obs = [1.0 if self._is_target_occluded() else 0.0]
 
         if self.belief_mode:
             mu, sigma = self.pf.get_belief()
             return np.concatenate(
-                [joint_obs, mu[0], sigma[0], ee_obs, goal_obs, holding_obs]
+                [joint_obs, mu[0], sigma[0], ee_obs, goal_obs, holding_obs, occluded_obs]
             ).astype(np.float32)
         else:
-            # Use the obs already sampled in step() — don't draw a second random sample.
             wrist_obs = self._last_wrist_obs
             if self.use_overhead_camera:
                 overhead_obs = self._get_overhead_noisy_obs()
                 return np.concatenate(
-                    [joint_obs, wrist_obs, overhead_obs, ee_obs, goal_obs, holding_obs]
+                    [joint_obs, wrist_obs, overhead_obs, ee_obs, goal_obs, holding_obs, occluded_obs]
                 ).astype(np.float32)
             return np.concatenate(
-                [joint_obs, wrist_obs, ee_obs, goal_obs, holding_obs]
+                [joint_obs, wrist_obs, ee_obs, goal_obs, holding_obs, occluded_obs]
             ).astype(np.float32)
 
     def render(self):
