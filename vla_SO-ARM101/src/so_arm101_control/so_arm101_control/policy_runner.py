@@ -56,8 +56,10 @@ GRIPPER_CLOSED = 1.74533
 class PolicyRunner:
     """Loads a trained PPO model and runs inference with proper obs construction."""
 
-    def __init__(self, model_dir, belief_mode=False):
+    def __init__(self, model_dir, belief_mode=False, use_camera_noise=True, use_occlusion=True):
         self.belief_mode = belief_mode
+        self.use_camera_noise = use_camera_noise
+        self.use_occlusion = use_occlusion
         self.rng = np.random.default_rng()
 
         # Load model
@@ -134,6 +136,15 @@ class PolicyRunner:
         self.step_count += 1
         return obs
 
+    def _effective_sigma(self, ee_pos, target):
+        """Compute observation sigma, optionally boosted by distance (camera noise)."""
+        sigma = self.sigma_ep
+        if self.use_camera_noise:
+            dist = np.linalg.norm(
+                ee_pos - np.array([target[0], target[1], TABLE_Z]))
+            sigma = max(sigma, 0.008 * (dist / 0.15))
+        return sigma
+
     def _build_plain_obs(self, block_true_poses, ee_pos):
         """Build wrist + overhead noisy observations (plain PPO mode)."""
         target = block_true_poses.get(TARGET_BLOCK)
@@ -141,8 +152,9 @@ class PolicyRunner:
         if target is None:
             return self._last_wrist_obs.copy(), self._last_overhead_obs.copy()
 
-        wrist_noise = self.rng.normal(0, self.sigma_ep, 3)
-        wrist_noise[2] = self.rng.normal(0, self.sigma_ep * 10)
+        sigma = self._effective_sigma(ee_pos, target)
+        wrist_noise = self.rng.normal(0, sigma, 3)
+        wrist_noise[2] = self.rng.normal(0, sigma * 10)
         wrist_obs = np.array([
             target[0] + wrist_noise[0],
             target[1] + wrist_noise[1],
@@ -150,8 +162,8 @@ class PolicyRunner:
         ])
         self._last_wrist_obs = wrist_obs
 
-        # Overhead: occluded if any distractor covers target
-        overhead_occluded = any(
+        # Overhead: occluded if any distractor covers target (when occlusion enabled)
+        overhead_occluded = self.use_occlusion and any(
             is_occluded_overhead(
                 target_pos=(target[0], target[1]),
                 occluder_pos=(block_true_poses[d][0], block_true_poses[d][1]),
@@ -191,17 +203,18 @@ class PolicyRunner:
 
         self.pf.predict()
 
-        wrist_noise = self.rng.normal(0, self.sigma_ep, 3)
-        wrist_noise[2] = self.rng.normal(0, self.sigma_ep * 10)
+        sigma = self._effective_sigma(ee_pos, target)
+        wrist_noise = self.rng.normal(0, sigma, 3)
+        wrist_noise[2] = self.rng.normal(0, sigma * 10)
         wrist_obs = np.array([
             target[0] + wrist_noise[0],
             target[1] + wrist_noise[1],
             target[2] + wrist_noise[2],
         ])
-        self.pf.update({0: wrist_obs}, self.sigma_ep)
+        self.pf.update({0: wrist_obs}, sigma)
 
-        # Overhead: occluded if any distractor covers target
-        overhead_occluded = any(
+        # Overhead: occluded if any distractor covers target (when occlusion enabled)
+        overhead_occluded = self.use_occlusion and any(
             is_occluded_overhead(
                 target_pos=(target[0], target[1]),
                 occluder_pos=(block_true_poses[d][0], block_true_poses[d][1]),

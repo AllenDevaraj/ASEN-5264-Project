@@ -1781,6 +1781,21 @@ class SOArm101ControlGUI(Node):
         tk.OptionMenu(rl_row, self._rl_model_var, 'ppo_plain', 'ppo_belief').pack(
             side=tk.LEFT, padx=5)
 
+        # Uncertainty toggles
+        rl_uncertainty_row = tk.Frame(rl_frame)
+        rl_uncertainty_row.pack(fill=tk.X, padx=5, pady=1)
+        tk.Label(rl_uncertainty_row, text='Uncertainties:', anchor='w').pack(side=tk.LEFT)
+        self._rl_camera_noise_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            rl_uncertainty_row, text='Camera Noise',
+            variable=self._rl_camera_noise_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        self._rl_occlusion_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            rl_uncertainty_row, text='Occlusion',
+            variable=self._rl_occlusion_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
         self._rl_pick_btn = tk.Button(
             rl_frame, text='Pick (RL)', bg='#4a9eff', fg='white',
             command=self._cmd_rl_pick)
@@ -2773,6 +2788,9 @@ class SOArm101ControlGUI(Node):
                 f'Model not found: {model_dir}/best_model.zip', 'error')
             return
 
+        use_camera_noise = self._rl_camera_noise_var.get()
+        use_occlusion = self._rl_occlusion_var.get()
+
         self._rl_running = True
         self._rl_pick_btn.config(state=tk.DISABLED)
         self._rl_stop_btn.config(state=tk.NORMAL)
@@ -2780,7 +2798,7 @@ class SOArm101ControlGUI(Node):
 
         threading.Thread(
             target=self._rl_policy_loop,
-            args=(model_dir, belief_mode),
+            args=(model_dir, belief_mode, use_camera_noise, use_occlusion),
             daemon=True,
         ).start()
 
@@ -2789,16 +2807,19 @@ class SOArm101ControlGUI(Node):
         self._rl_running = False
         self._append_log('RL policy stop requested')
 
-    def _rl_policy_loop(self, model_dir, belief_mode):
+    def _rl_policy_loop(self, model_dir, belief_mode, use_camera_noise=True, use_occlusion=True):
         """Run trained PPO policy in a control loop. Executes in background thread."""
         import time as _time
         try:
             from so_arm101_control.policy_runner import PolicyRunner
             from so_arm101_control.compute_workspace import forward_kinematics
 
-            runner = PolicyRunner(model_dir, belief_mode=belief_mode)
+            runner = PolicyRunner(
+                model_dir, belief_mode=belief_mode,
+                use_camera_noise=use_camera_noise, use_occlusion=use_occlusion)
             mode_str = 'Belief PPO' if belief_mode else 'Plain PPO'
-            self._append_log(f'RL: {mode_str} model loaded')
+            noise_str = f"noise={'ON' if use_camera_noise else 'OFF'} occ={'ON' if use_occlusion else 'OFF'}"
+            self._append_log(f'RL: {mode_str} loaded [{noise_str}]')
 
             # 1. Randomize blocks
             block_poses = runner.randomize_blocks()
