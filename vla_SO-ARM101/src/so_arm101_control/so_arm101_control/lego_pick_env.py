@@ -115,6 +115,7 @@ class LegoPickEnv(gym.Env):
         approach_shaping=True,
         render_mode=None,
         use_overhead_camera=False,
+        sigma_drift=0.0,
     ):
         super().__init__()
         self.belief_mode = belief_mode
@@ -124,6 +125,7 @@ class LegoPickEnv(gym.Env):
         self.approach_shaping = approach_shaping
         self.render_mode = render_mode
         self.use_overhead_camera = use_overhead_camera
+        self.sigma_drift = sigma_drift
 
         # Load MuJoCo model
         self.model, self.data = load_mujoco_model()
@@ -171,8 +173,9 @@ class LegoPickEnv(gym.Env):
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
 
-        # Particle filter
-        self.pf = ParticleFilter(n_particles=300, n_blocks=1)
+        # Particle filter — process noise tuned to match actual block drift
+        pf_process_noise = max(0.0005, self.sigma_drift)
+        self.pf = ParticleFilter(n_particles=300, n_blocks=1, process_noise_xy=pf_process_noise)
 
         # Renderer for rgb_array mode
         self._renderer = None
@@ -311,6 +314,10 @@ class LegoPickEnv(gym.Env):
 
         # 7. Read block true poses from freejoint qpos
         self._read_block_poses()
+
+        # 7b. Apply target drift (if enabled and block is not held)
+        if self.sigma_drift > 0 and self._holding_block != TARGET_BLOCK:
+            self._apply_target_drift()
 
         # 8. Sample block observation once this step (used for reward + policy obs)
         # Must happen before reward so both use the same random draw.
@@ -772,6 +779,17 @@ class LegoPickEnv(gym.Env):
         if jnt_id >= 0:
             vadr = self.model.jnt_dofadr[jnt_id]
             self.data.qvel[vadr:vadr + 6] = 0.0
+
+    def _apply_target_drift(self):
+        """Apply small random XY perturbation to the unheld target block."""
+        if TARGET_BLOCK not in self.freejoint_map:
+            return
+        drift = self.np_random.normal(0, self.sigma_drift, 2)
+        qadr = self.freejoint_map[TARGET_BLOCK]
+        self.data.qpos[qadr] += drift[0]
+        self.data.qpos[qadr + 1] += drift[1]
+        # Refresh true pose cache so observations and rewards use the drifted position
+        self._read_block_poses()
 
     def _release_block(self, block_name=None):
         """Release block at current position. It will fall under gravity."""

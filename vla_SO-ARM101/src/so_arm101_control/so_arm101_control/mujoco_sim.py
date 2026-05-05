@@ -22,6 +22,12 @@ import math
 import os
 import re
 import threading
+import time
+
+# Force the offscreen Renderer (camera images) to use EGL so it doesn't
+# create a GLX context that conflicts with the viewer's GLFW/GLX context.
+# Must be set before any mujoco import that touches OpenGL.
+os.environ.setdefault('MUJOCO_GL', 'egl')
 import xml.etree.ElementTree as ET
 
 import mujoco
@@ -334,15 +340,12 @@ class MujocoSimNode(Node):
         """Start MuJoCo interactive viewer in a background thread."""
         def _run_viewer():
             try:
-                with mujoco.viewer.launch_passive(
-                    self.model, self.data, key_callback=None
-                ) as viewer:
+                with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
                     self._viewer_handle = viewer
                     while viewer.is_running():
                         with self._lock:
                             viewer.sync()
-                        import time
-                        time.sleep(0.02)  # ~50fps viewer update
+                        time.sleep(0.02)
             except Exception as e:
                 self.get_logger().warn(f'Viewer error: {e}')
 

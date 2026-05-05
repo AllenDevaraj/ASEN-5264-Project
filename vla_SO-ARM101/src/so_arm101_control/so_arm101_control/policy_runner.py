@@ -56,10 +56,12 @@ GRIPPER_CLOSED = 1.74533
 class PolicyRunner:
     """Loads a trained PPO model and runs inference with proper obs construction."""
 
-    def __init__(self, model_dir, belief_mode=False, use_camera_noise=True, use_occlusion=True):
+    def __init__(self, model_dir, belief_mode=False, use_camera_noise=True, use_occlusion=True, use_drift=False):
         self.belief_mode = belief_mode
         self.use_camera_noise = use_camera_noise
         self.use_occlusion = use_occlusion
+        self.use_drift = use_drift
+        self.sigma_drift = 0.002 if use_drift else 0.0
         self.rng = np.random.default_rng()
 
         # Load model
@@ -86,6 +88,7 @@ class PolicyRunner:
         self.step_count = 0
         self._last_wrist_obs = np.zeros(3)
         self._last_overhead_obs = np.zeros(3)
+        self._drifted_poses = {}  # internally drifted block poses for use_drift mode
 
     def reset_episode(self):
         """Reset episode state. Call before each pick attempt."""
@@ -95,8 +98,10 @@ class PolicyRunner:
         self.step_count = 0
         self._last_wrist_obs = np.zeros(3)
         self._last_overhead_obs = np.zeros(3)
+        self._drifted_poses = {}
+        pf_process_noise = max(0.0005, self.sigma_drift)
         if self.pf is not None:
-            self.pf = ParticleFilter(n_particles=300, n_blocks=1)
+            self.pf = ParticleFilter(n_particles=300, n_blocks=1, process_noise_xy=pf_process_noise)
 
     def build_observation(self, joints_dict, block_true_poses, ee_pos, goal_xy, holding):
         """Construct 18D observation matching lego_pick_env._build_observation().
@@ -108,6 +113,20 @@ class PolicyRunner:
             goal_xy: np.array([x, y]) goal position
             holding: bool, whether holding block
         """
+        # Apply drift to internal pose cache (only when block is not held)
+        if self.use_drift and not holding:
+            if not self._drifted_poses:
+                self._drifted_poses = {k: list(v) for k, v in block_true_poses.items()}
+            target = self._drifted_poses.get(TARGET_BLOCK)
+            if target is not None:
+                drift = self.rng.normal(0, self.sigma_drift, 2)
+                target[0] += drift[0]
+                target[1] += drift[1]
+            block_true_poses = {k: tuple(v) for k, v in self._drifted_poses.items()}
+        elif self.use_drift and holding:
+            # While holding, sync drift cache to actual pose (block carried by EE)
+            self._drifted_poses = {k: list(v) for k, v in block_true_poses.items()}
+
         # [0:6] Joint angles
         joint_obs = []
         for name in ARM_JOINT_NAMES:

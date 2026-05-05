@@ -1795,6 +1795,11 @@ class SOArm101ControlGUI(Node):
             rl_uncertainty_row, text='Occlusion',
             variable=self._rl_occlusion_var,
         ).pack(side=tk.LEFT, padx=(4, 0))
+        self._rl_drift_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            rl_uncertainty_row, text='Drift',
+            variable=self._rl_drift_var,
+        ).pack(side=tk.LEFT, padx=(4, 0))
 
         self._rl_pick_btn = tk.Button(
             rl_frame, text='Pick (RL)', bg='#4a9eff', fg='white',
@@ -2790,6 +2795,7 @@ class SOArm101ControlGUI(Node):
 
         use_camera_noise = self._rl_camera_noise_var.get()
         use_occlusion = self._rl_occlusion_var.get()
+        use_drift = self._rl_drift_var.get()
 
         self._rl_running = True
         self._rl_pick_btn.config(state=tk.DISABLED)
@@ -2798,7 +2804,7 @@ class SOArm101ControlGUI(Node):
 
         threading.Thread(
             target=self._rl_policy_loop,
-            args=(model_dir, belief_mode, use_camera_noise, use_occlusion),
+            args=(model_dir, belief_mode, use_camera_noise, use_occlusion, use_drift),
             daemon=True,
         ).start()
 
@@ -2807,7 +2813,7 @@ class SOArm101ControlGUI(Node):
         self._rl_running = False
         self._append_log('RL policy stop requested')
 
-    def _rl_policy_loop(self, model_dir, belief_mode, use_camera_noise=True, use_occlusion=True):
+    def _rl_policy_loop(self, model_dir, belief_mode, use_camera_noise=True, use_occlusion=True, use_drift=False):
         """Run trained PPO policy in a control loop. Executes in background thread."""
         import time as _time
         try:
@@ -2816,9 +2822,12 @@ class SOArm101ControlGUI(Node):
 
             runner = PolicyRunner(
                 model_dir, belief_mode=belief_mode,
-                use_camera_noise=use_camera_noise, use_occlusion=use_occlusion)
+                use_camera_noise=use_camera_noise, use_occlusion=use_occlusion,
+                use_drift=use_drift)
             mode_str = 'Belief PPO' if belief_mode else 'Plain PPO'
-            noise_str = f"noise={'ON' if use_camera_noise else 'OFF'} occ={'ON' if use_occlusion else 'OFF'}"
+            noise_str = (f"noise={'ON' if use_camera_noise else 'OFF'} "
+                         f"occ={'ON' if use_occlusion else 'OFF'} "
+                         f"drift={'ON' if use_drift else 'OFF'}")
             self._append_log(f'RL: {mode_str} loaded [{noise_str}]')
 
             # 1. Randomize blocks

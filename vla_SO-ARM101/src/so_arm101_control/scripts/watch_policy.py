@@ -53,11 +53,21 @@ def main():
     args = parser.parse_args()
 
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    pkg_dir = os.path.normpath(os.path.join(scripts_dir, '..'))
     if args.model_dir:
         model_dir = args.model_dir if os.path.isabs(args.model_dir) \
             else os.path.join(scripts_dir, args.model_dir)
     else:
-        model_dir = os.path.join(scripts_dir, f"models/ppo_{args.mode}")
+        name = f"ppo_{args.mode}"
+        for candidate in [
+            os.path.join(pkg_dir, 'models', name),
+            os.path.join(scripts_dir, 'models', name),
+        ]:
+            if os.path.isfile(os.path.join(candidate, 'best_model.zip')):
+                model_dir = candidate
+                break
+        else:
+            model_dir = os.path.join(pkg_dir, 'models', name)
     model_path = os.path.join(model_dir, "best_model.zip")
     norm_path  = os.path.join(model_dir, "vec_normalize.pkl")
 
