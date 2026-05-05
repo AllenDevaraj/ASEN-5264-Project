@@ -108,10 +108,22 @@ def main():
     args = parser.parse_args()
 
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    pkg_dir = os.path.join(scripts_dir, '..')
+
+    def _resolve_model(name):
+        # Prefer the package-level models/ (latest training run), fall back to scripts/models/
+        candidates = [
+            os.path.join(pkg_dir, 'models', name),
+            os.path.join(scripts_dir, 'models', name),
+        ]
+        for c in candidates:
+            if os.path.isfile(os.path.join(c, 'best_model.zip')):
+                return os.path.normpath(c)
+        return os.path.normpath(candidates[0])
 
     configs = [
-        ("plain",  False, os.path.join(scripts_dir, "models/ppo_plain")),
-        ("belief", True,  os.path.join(scripts_dir, "models/ppo_belief")),
+        ("plain",  False, _resolve_model("ppo_plain")),
+        ("belief", True,  _resolve_model("ppo_belief")),
     ]
 
     print(f"\nNoise sweep: {len(args.sigmas)} levels × {args.episodes} episodes × 2 policies")
