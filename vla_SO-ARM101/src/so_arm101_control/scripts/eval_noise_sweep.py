@@ -111,15 +111,7 @@ def main():
     pkg_dir = os.path.join(scripts_dir, '..')
 
     def _resolve_model(name):
-        # Prefer the package-level models/ (latest training run), fall back to scripts/models/
-        candidates = [
-            os.path.join(pkg_dir, 'models', name),
-            os.path.join(scripts_dir, 'models', name),
-        ]
-        for c in candidates:
-            if os.path.isfile(os.path.join(c, 'best_model.zip')):
-                return os.path.normpath(c)
-        return os.path.normpath(candidates[0])
+        return os.path.normpath(os.path.join(scripts_dir, 'models', name))
 
     configs = [
         ("plain",  False, _resolve_model("ppo_plain")),
