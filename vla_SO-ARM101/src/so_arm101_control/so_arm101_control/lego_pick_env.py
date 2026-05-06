@@ -161,14 +161,14 @@ class LegoPickEnv(gym.Env):
         )
 
         # Observation layout:
-        #   Plain:  16D [joints(6), stale_wrist(3),           ee(3), goal(2), holding(1), occluded(1)]
-        #   Belief: 19D [joints(6), pf_mu(3), pf_sigma(3),    ee(3), goal(2), holding(1), occluded(1)]
+        #   Plain:  13D [joints(6), stale_wrist(3),        goal(2), holding(1), occluded(1)]
+        #   Belief: 16D [joints(6), pf_mu(3), pf_sigma(3), goal(2), holding(1), occluded(1)]
         if self.belief_mode:
-            obs_dim = 19
-        elif self.use_overhead_camera:
-            obs_dim = 19
-        else:
             obs_dim = 16
+        elif self.use_overhead_camera:
+            obs_dim = 16
+        else:
+            obs_dim = 13
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -819,12 +819,11 @@ class LegoPickEnv(gym.Env):
         Layout:
           [0:6]   joint angles + gripper
           [6:9]   block obs (wrist noisy / PF mu)
-          [9:12]  block obs (overhead noisy / PF sigma)  — belief/overhead only
-          [12:15] end-effector position (x, y, z)
-          [15:17] goal position (x, y)
-          [17]    holding flag (0 or 1)
-          [18]    wrist occluded flag (1.0 = block not visible, 0.0 = visible)
-        Plain mode offsets shift by -3 (no overhead/sigma slot).
+          [9:12]  block obs (PF sigma)  — belief/overhead only
+          [9/12:11/14]  goal position (x, y)
+          [11/14]       holding flag (0 or 1)
+          [12/15]       wrist occluded flag (1.0 = block not visible, 0.0 = visible)
+        Plain mode offsets shift by -3 (no sigma slot).
         """
         joint_obs = []
         for name in ARM_JOINT_NAMES:
@@ -835,7 +834,6 @@ class LegoPickEnv(gym.Env):
         gripper_val = self.data.qpos[self.joint_map["gripper_joint"]]
         joint_obs.append(gripper_val)
 
-        ee_obs = self._ee_pos.tolist()
         goal_obs = self._goal_pos.tolist()
         holding_obs = [1.0 if self._holding_block == TARGET_BLOCK else 0.0]
         occluded_obs = [1.0 if self._is_target_occluded() else 0.0]
@@ -843,17 +841,17 @@ class LegoPickEnv(gym.Env):
         if self.belief_mode:
             mu, sigma = self.pf.get_belief()
             return np.concatenate(
-                [joint_obs, mu[0], sigma[0], ee_obs, goal_obs, holding_obs, occluded_obs]
+                [joint_obs, mu[0], sigma[0], goal_obs, holding_obs, occluded_obs]
             ).astype(np.float32)
         else:
             wrist_obs = self._last_wrist_obs
             if self.use_overhead_camera:
                 overhead_obs = self._get_overhead_noisy_obs()
                 return np.concatenate(
-                    [joint_obs, wrist_obs, overhead_obs, ee_obs, goal_obs, holding_obs, occluded_obs]
+                    [joint_obs, wrist_obs, overhead_obs, goal_obs, holding_obs, occluded_obs]
                 ).astype(np.float32)
             return np.concatenate(
-                [joint_obs, wrist_obs, ee_obs, goal_obs, holding_obs, occluded_obs]
+                [joint_obs, wrist_obs, goal_obs, holding_obs, occluded_obs]
             ).astype(np.float32)
 
     def render(self):

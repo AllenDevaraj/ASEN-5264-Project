@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Phase 3: Train Belief-Augmented PPO on LegoPickEnv.
 
-Uses 12D observation (particle filter belief: mu, sigma) instead of raw noisy obs.
+Uses 16D observation (joints, PF mu, PF sigma, goal, flags) instead of raw noisy obs.
 Same PPO hyperparameters as Plain PPO for fair comparison.
 
 Usage:
@@ -44,12 +44,13 @@ class SaveVecNormalizeCallback(BaseCallback):
         return True
 
 
-def make_env(rank, seed=0, use_camera_noise=False):
+def make_env(rank, seed=0, use_camera_noise=False, sigma_drift=0.0):
     def _init():
         from so_arm101_control.lego_pick_env import LegoPickEnv
         env = LegoPickEnv(
             belief_mode=True,
             use_camera_noise=use_camera_noise,
+            sigma_drift=sigma_drift,
         )
         env = Monitor(env)
         env.reset(seed=seed + rank)
@@ -65,6 +66,8 @@ def main():
     parser.add_argument("--eval-freq", type=int, default=10_000)
     parser.add_argument("--eval-episodes", type=int, default=50)
     parser.add_argument("--camera-noise", action="store_true", default=True)
+    parser.add_argument("--sigma-drift", type=float, default=0.002,
+                        help="Target block drift per step in meters (0=disabled)")
     parser.add_argument("--output-dir", type=str, default="./models/ppo_belief")
     parser.add_argument("--log-dir", type=str, default="./logs/ppo_belief")
     args = parser.parse_args()
@@ -74,13 +77,14 @@ def main():
 
     # Create vectorized training env
     env = SubprocVecEnv([
-        make_env(i, args.seed, use_camera_noise=args.camera_noise)
+        make_env(i, args.seed, use_camera_noise=args.camera_noise, sigma_drift=args.sigma_drift)
         for i in range(args.n_envs)
     ])
     env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
     # Create eval env (must also be wrapped in VecNormalize to match training env)
-    eval_env = DummyVecEnv([make_env(0, args.seed + 100, use_camera_noise=args.camera_noise)])
+    eval_env = DummyVecEnv([make_env(0, args.seed + 100, use_camera_noise=args.camera_noise,
+                                     sigma_drift=args.sigma_drift)])
     eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
 
     # Linear decay schedules: start high for exploration, end near zero for fine-tuning
@@ -120,7 +124,8 @@ def main():
     save_norm_callback = SaveVecNormalizeCallback(save_path=args.output_dir, verbose=1)
 
     # Trajectory logger — records per-step belief sigma evolution during eval
-    traj_eval_env = DummyVecEnv([make_env(0, args.seed + 200, use_camera_noise=args.camera_noise)])
+    traj_eval_env = DummyVecEnv([make_env(0, args.seed + 200, use_camera_noise=args.camera_noise,
+                                          sigma_drift=args.sigma_drift)])
     traj_eval_env = VecNormalize(traj_eval_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
     traj_dir = os.path.join(args.log_dir, "trajectories")
     traj_callback = TrajectoryLoggerCallback(
@@ -134,7 +139,7 @@ def main():
 
     print(f"Training Belief-Augmented PPO for {args.timesteps} steps...")
     print(f"  Envs: {args.n_envs}, Camera noise: {args.camera_noise}")
-    print(f"  Obs: 12D (mu_x, mu_y, mu_theta, sigma_x, sigma_y, sigma_theta)")
+    print(f"  Obs: 16D (joints(6), mu(3), sigma(3), goal(2), holding(1), occluded(1))")
     print(f"  Output: {args.output_dir}, Logs: {args.log_dir}")
 
     model.learn(
