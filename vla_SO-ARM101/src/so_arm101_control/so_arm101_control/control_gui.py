@@ -1782,7 +1782,8 @@ class SOArm101ControlGUI(Node):
         rl_row.pack(fill=tk.X, padx=5, pady=2)
         tk.Label(rl_row, text='Model:', anchor='w').pack(side=tk.LEFT)
         self._rl_model_var = tk.StringVar(value='ppo_plain')
-        tk.OptionMenu(rl_row, self._rl_model_var, 'ppo_plain', 'ppo_belief').pack(
+        tk.OptionMenu(rl_row, self._rl_model_var,
+                      'ppo_plain', 'ppo_belief', 'pomcp').pack(
             side=tk.LEFT, padx=5)
 
         # Uncertainty toggles
@@ -2771,35 +2772,58 @@ class SOArm101ControlGUI(Node):
             return
 
         model_name = self._rl_model_var.get()
-        belief_mode = (model_name == 'ppo_belief')
+        use_camera_noise = self._rl_camera_noise_var.get()
+        use_occlusion    = self._rl_occlusion_var.get()
+        use_drift        = self._rl_drift_var.get()
 
-        # Resolve model path — check source tree first, then installed path
-        src_scripts = os.path.join(
+        # Resolve scripts/models directory
+        src_scripts = os.path.normpath(os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            '..', '..', '..', 'so_arm101_control', 'scripts')
-        src_scripts = os.path.normpath(src_scripts)
+            '..', '..', '..', 'so_arm101_control', 'scripts'))
         installed_scripts = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
+        scripts_dirs = [src_scripts, installed_scripts,
+                        '/home/the2xman/ASEN-5264-Project/vla_SO-ARM101/'
+                        'src/so_arm101_control/scripts']
 
-        for scripts_dir in [src_scripts, installed_scripts]:
-            candidate = os.path.join(scripts_dir, 'models', model_name)
-            if os.path.isfile(os.path.join(candidate, 'best_model.zip')):
-                model_dir = candidate
+        if model_name == 'pomcp':
+            # POMCP: needs world_model.pt in models/pomcp/
+            model_dir = None
+            for sd in scripts_dirs:
+                cand = os.path.join(sd, 'models', 'pomcp')
+                if os.path.isfile(os.path.join(cand, 'world_model.pt')):
+                    model_dir = cand
+                    break
+            if model_dir is None:
+                self._append_log('POMCP model not found: run train_pomcp.py --collect first', 'error')
+                return
+
+            self._rl_running = True
+            self._rl_pick_btn.config(state=tk.DISABLED)
+            self._rl_stop_btn.config(state=tk.NORMAL)
+            self._rl_status_var.set('Loading POMCP...')
+            threading.Thread(
+                target=self._rl_pomcp_loop,
+                args=(model_dir, use_camera_noise, use_occlusion, use_drift),
+                daemon=True,
+            ).start()
+            return
+
+        # PPO path (ppo_plain / ppo_belief)
+        belief_mode = (model_name == 'ppo_belief')
+        model_dir = None
+        for sd in scripts_dirs:
+            cand = os.path.join(sd, 'models', model_name)
+            if os.path.isfile(os.path.join(cand, 'best_model.zip')):
+                model_dir = cand
                 break
-        else:
-            # Hardcoded fallback to known source location
-            model_dir = os.path.join(
-                '/home/the2xman/ASEN-5264-Project/vla_SO-ARM101/src/'
-                'so_arm101_control/scripts/models', model_name)
+        if model_dir is None:
+            model_dir = os.path.join(scripts_dirs[-1], 'models', model_name)
 
         if not os.path.isfile(os.path.join(model_dir, 'best_model.zip')):
             self._append_log(
                 f'Model not found: {model_dir}/best_model.zip', 'error')
             return
-
-        use_camera_noise = self._rl_camera_noise_var.get()
-        use_occlusion = self._rl_occlusion_var.get()
-        use_drift = self._rl_drift_var.get()
 
         self._rl_running = True
         self._rl_pick_btn.config(state=tk.DISABLED)
@@ -3021,6 +3045,197 @@ class SOArm101ControlGUI(Node):
                 # can operate FK/IK with the block visually held in the gripper.
                 # The pin is cleared at the start of the next RL run.
                 self._rl_release_block('red_lego_2x4')
+            self._rl_running = False
+            self.root.after(0, self._rl_pick_btn.config, {'state': tk.NORMAL})
+            self.root.after(0, self._rl_stop_btn.config, {'state': tk.DISABLED})
+            self.root.after(0, self._rl_status_var.set, 'Idle')
+
+    def _rl_pomcp_loop(self, model_dir, use_camera_noise=True, use_occlusion=True, use_drift=False):
+        """Pick-only loop using POMCP + world model. Runs in background thread.
+
+        Plans with UCB1 MCTS using world_model.pt for rollouts (~0.04ms/step).
+        Stops after grasp + lift to LIFT_Z, same as PPO modes. Use FK/IK to place.
+        """
+        import time as _time
+        _succeeded = False
+        try:
+            from so_arm101_control.pomcp_gui_runner import (
+                WorldModelPOMCPRunner, ACTION_NAMES, DISCRETE_ACTIONS,
+                TARGET_BLOCK, GOAL_THRESHOLD,
+            )
+            from so_arm101_control.compute_workspace import forward_kinematics
+
+            runner = WorldModelPOMCPRunner(
+                model_dir, n_rollouts=200, max_depth=20,
+                use_camera_noise=use_camera_noise,
+                use_occlusion=use_occlusion,
+                use_drift=use_drift,
+            )
+            noise_str = (f"noise={'ON' if use_camera_noise else 'OFF'} "
+                         f"occ={'ON' if use_occlusion else 'OFF'} "
+                         f"drift={'ON' if use_drift else 'OFF'}")
+            self._append_log(f'POMCP: world model loaded [{noise_str}]')
+
+            # 1. Release any pinned block, randomize positions
+            self._rl_release_block(TARGET_BLOCK)
+            block_poses = runner.randomize_blocks()
+            self._rl_set_block_poses(block_poses)
+            self._append_log('POMCP: blocks randomized')
+            _time.sleep(0.5)
+
+            # 2. Home position
+            from so_arm101_control.compute_workspace import geometric_ik as _geo_ik
+            home_sols = _geo_ik(0.18, 0.0, 0.06, grasp_yaw=0.0)
+            home = home_sols[0] if home_sols else {n: 0.0 for n in ARM_JOINT_NAMES}
+            self._send_arm_goal(home, duration_s=2.0)
+            self._send_gripper_goal(JOINT_LIMITS['gripper_joint'][1], duration_s=0.5)
+            self._append_log('POMCP: moving to home...')
+            _time.sleep(2.5)
+
+            # 3. Read block poses and sample goal
+            with self.objects_lock:
+                obj_data = dict(self.objects_data)
+            block_true = {}
+            for name in [TARGET_BLOCK, 'blue_lego_2x2']:
+                if name in obj_data:
+                    d = obj_data[name]
+                    yaw = math.atan2(2.0 * d.get('qw', 1.0) * d.get('qz', 0.0),
+                                     1.0 - 2.0 * d.get('qz', 0.0)**2)
+                    block_true[name] = (d['x'], d['y'], yaw)
+                elif name in block_poses:
+                    block_true[name] = block_poses[name]
+
+            goal_xy = runner.sample_goal(block_true)
+            self._append_log(f'POMCP: goal at ({goal_xy[0]:.3f}, {goal_xy[1]:.3f})')
+
+            # 4. Reset episode belief
+            runner.reset_episode()
+            self._append_log(f'POMCP: sigma_ep={runner.sigma_ep*1000:.1f}mm, starting loop')
+
+            max_steps  = 600
+            rate_period = 0.08
+
+            for step in range(max_steps):
+                if not self._rl_running:
+                    self._append_log('POMCP: stopped by user')
+                    break
+
+                t_start = _time.time()
+
+                # Read joints + EE
+                with self.joint_lock:
+                    joints = {n: self.joint_positions[n] for n in ALL_JOINT_NAMES}
+                joint_angles = [joints.get(n, 0.0) for n in ARM_JOINT_NAMES]
+                ee_pos = np.array(forward_kinematics(joint_angles))
+
+                # Read latest block poses
+                with self.objects_lock:
+                    obj_data = dict(self.objects_data)
+                for name in [TARGET_BLOCK, 'blue_lego_2x2']:
+                    if name in obj_data:
+                        d = obj_data[name]
+                        yaw = math.atan2(2.0 * d.get('qw', 1.0) * d.get('qz', 0.0),
+                                         1.0 - 2.0 * d.get('qz', 0.0)**2)
+                        block_true[name] = (d['x'], d['y'], yaw)
+
+                # Update belief and plan
+                if not runner.holding_block:
+                    runner.update_belief(block_true, ee_pos)
+
+                state      = runner.build_state(ee_pos)
+                action_idx = runner.plan(state, goal_xy)
+                action     = DISCRETE_ACTIONS[action_idx]
+                act_name   = ACTION_NAMES[action_idx]
+
+                # Status
+                mu, sigma = runner.pf.get_belief()
+                status = (f'Step {step}: {act_name}  '
+                          f'μ=({mu[0][0]:.2f},{mu[0][1]:.2f})  '
+                          f'σ={sigma[0][0]*1000:.1f}mm  '
+                          f'{"HOLDING" if runner.holding_block else ""}')
+                self.root.after(0, self._rl_status_var.set, status)
+
+                # Execute movement (actions 0-5) or gripper (6-7)
+                is_gripper = action_idx in (6, 7)
+                if not is_gripper:
+                    new_joints = runner.ik_step(ee_pos, action_idx)
+                    if new_joints is not None:
+                        self._send_arm_traj_direct(new_joints, duration_s=rate_period)
+                    elif step % 20 == 0:
+                        self._append_log(f'POMCP: IK fail at step {step}')
+
+                # Pin block to EE while carrying
+                if runner.holding_block:
+                    self._rl_move_block_to_ee(TARGET_BLOCK, ee_pos)
+
+                # Grasp check — stop at pick, same as PPO modes
+                if not runner.holding_block and action_idx == 6:
+                    if runner.check_grasp(ee_pos, block_true):
+                        target = block_true.get(TARGET_BLOCK)
+                        gdist = (np.linalg.norm(ee_pos[:2] - np.array([target[0], target[1]]))
+                                 if target else 0.0)
+                        self._append_log(
+                            f'POMCP: Grasp! step={step} dist={gdist*1000:.1f}mm')
+
+                        # Close gripper physically
+                        self._send_gripper_goal(
+                            JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
+                        _time.sleep(0.4)
+
+                        # Lift to handoff height (same logic as PPO loop)
+                        LIFT_Z = 0.10
+                        lift_xy = (float(ee_pos[0]), float(ee_pos[1]))
+                        lift_sols = _geo_ik(lift_xy[0], lift_xy[1], LIFT_Z, grasp_yaw=0.0)
+                        if not lift_sols:
+                            lift_xy  = (0.18, 0.0)
+                            lift_sols = _geo_ik(lift_xy[0], lift_xy[1], LIFT_Z, grasp_yaw=0.0)
+
+                        self._rl_move_block_to_ee(TARGET_BLOCK, ee_pos)
+                        if lift_sols:
+                            self._append_log(
+                                f'POMCP: lifting to ({lift_xy[0]:.2f},{lift_xy[1]:.2f})'
+                                f' z={LIFT_Z*100:.0f}cm')
+                            self._send_arm_goal(lift_sols[0], duration_s=1.5)
+                            for _ in range(int(1.5 / rate_period)):
+                                with self.joint_lock:
+                                    _jnts = [self.joint_positions.get(n, 0.0)
+                                             for n in ARM_JOINT_NAMES]
+                                _cur_ee = np.array(forward_kinematics(_jnts))
+                                self._rl_move_block_to_ee(TARGET_BLOCK, _cur_ee)
+                                _time.sleep(rate_period)
+                        else:
+                            self._append_log('POMCP: lift IK failed — holding at grasp pose')
+
+                        self._append_log('POMCP: Done — use FK/IK to place manually')
+                        _succeeded = True
+                        break
+
+                # Per-step diagnostic every 10 steps
+                if step % 10 == 0:
+                    tgt = block_true.get(TARGET_BLOCK)
+                    if tgt and not runner.holding_block:
+                        xy = np.linalg.norm(ee_pos[:2] - np.array([tgt[0], tgt[1]]))
+                        self._append_log(
+                            f'  step={step:3d} ee=({ee_pos[0]:.3f},{ee_pos[1]:.3f},'
+                            f'{ee_pos[2]:.3f}) XY={xy*1000:.1f}mm act={act_name}')
+                    elif runner.holding_block:
+                        dg = np.linalg.norm(ee_pos[:2] - goal_xy)
+                        self._append_log(
+                            f'  step={step:3d} CARRYING dist_goal={dg*1000:.1f}mm act={act_name}')
+
+                elapsed = _time.time() - t_start
+                if elapsed < rate_period:
+                    _time.sleep(rate_period - elapsed)
+            else:
+                self._append_log(f'POMCP: timeout after {max_steps} steps')
+
+        except Exception as e:
+            self._append_log(f'POMCP error: {e}', 'error')
+            import traceback
+            traceback.print_exc()
+        finally:
+            if not _succeeded:
+                self._rl_release_block(TARGET_BLOCK)
             self._rl_running = False
             self.root.after(0, self._rl_pick_btn.config, {'state': tk.NORMAL})
             self.root.after(0, self._rl_stop_btn.config, {'state': tk.DISABLED})

@@ -44,6 +44,7 @@ DISCRETE_ACTIONS = {
     7: np.array([0.0, 0.0, 0.0, -1.0]),      # OPEN gripper
 }
 N_ACTIONS = len(DISCRETE_ACTIONS)
+ACTION_NAMES = ["+X", "-X", "+Y", "-Y", "LOW", "RISE", "CLOS", "OPEN"]
 
 
 def obs_hash(obs, resolution=0.005):
