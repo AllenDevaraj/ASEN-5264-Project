@@ -44,7 +44,7 @@ SPAWN_ANGLE_MIN = -1.0
 SPAWN_ANGLE_MAX = 1.0
 SIGMA_OVERHEAD = 0.005
 SIGMA_LOW = 0.003
-SIGMA_HIGH = 0.020
+SIGMA_HIGH = 0.015   # matches LegoPickEnv default (sigma_high=0.015)
 EE_R_MIN = 0.09
 EE_R_MAX = 0.31
 EE_Z_MIN = 0.002
@@ -88,6 +88,7 @@ class PolicyRunner:
         self.step_count = 0
         self._last_wrist_obs = np.zeros(3)
         self._last_overhead_obs = np.zeros(3)
+        self._wrist_occluded = False
         self._drifted_poses = {}  # internally drifted block poses for use_drift mode
 
     def reset_episode(self):
@@ -98,13 +99,17 @@ class PolicyRunner:
         self.step_count = 0
         self._last_wrist_obs = np.zeros(3)
         self._last_overhead_obs = np.zeros(3)
+        self._wrist_occluded = False
         self._drifted_poses = {}
         pf_process_noise = max(0.0005, self.sigma_drift)
         if self.pf is not None:
             self.pf = ParticleFilter(n_particles=300, n_blocks=1, process_noise_xy=pf_process_noise)
 
     def build_observation(self, joints_dict, block_true_poses, ee_pos, goal_xy, holding):
-        """Construct 18D observation matching lego_pick_env._build_observation().
+        """Construct observation matching lego_pick_env._build_observation().
+
+        Belief mode (16D): joints(6) + mu(3) + sigma(3) + goal(2) + holding(1) + occluded(1)
+        Plain  mode (13D): joints(6) + wrist(3)          + goal(2) + holding(1) + occluded(1)
 
         Args:
             joints_dict: {joint_name: angle} for all 6 joints
@@ -133,24 +138,25 @@ class PolicyRunner:
             joint_obs.append(joints_dict.get(name, 0.0))
         joint_obs.append(joints_dict.get('gripper_joint', 0.0))
 
-        # [6:9] and [9:12] Block observations
+        # [6:9] Block observation (wrist / PF mu); [9:12] PF sigma (belief only)
         if self.belief_mode:
             block_obs_1, block_obs_2 = self._build_belief_obs(block_true_poses, ee_pos)
         else:
-            block_obs_1, block_obs_2 = self._build_plain_obs(block_true_poses, ee_pos)
+            block_obs_1 = self._build_plain_obs(block_true_poses, ee_pos)
 
-        # [12:15] EE position
-        ee_obs = ee_pos.tolist()
-
-        # [15:17] Goal position
+        # Goal, holding, occluded flags
         goal_obs = goal_xy.tolist()
-
-        # [17] Holding flag
         holding_obs = [1.0 if holding else 0.0]
+        occluded_obs = [1.0 if self._wrist_occluded else 0.0]
 
-        obs = np.concatenate([
-            joint_obs, block_obs_1, block_obs_2, ee_obs, goal_obs, holding_obs
-        ]).astype(np.float32)
+        if self.belief_mode:
+            obs = np.concatenate([
+                joint_obs, block_obs_1, block_obs_2, goal_obs, holding_obs, occluded_obs
+            ]).astype(np.float32)
+        else:
+            obs = np.concatenate([
+                joint_obs, block_obs_1, goal_obs, holding_obs, occluded_obs
+            ]).astype(np.float32)
 
         self.step_count += 1
         return obs
@@ -165,11 +171,27 @@ class PolicyRunner:
         return sigma
 
     def _build_plain_obs(self, block_true_poses, ee_pos):
-        """Build wrist + overhead noisy observations (plain PPO mode)."""
+        """Build wrist noisy observation (plain PPO mode). Returns 3D array."""
         target = block_true_poses.get(TARGET_BLOCK)
 
         if target is None:
-            return self._last_wrist_obs.copy(), self._last_overhead_obs.copy()
+            return self._last_wrist_obs.copy()
+
+        # Use overhead occlusion as proxy for wrist occlusion (no camera pose in runner)
+        wrist_occluded = self.use_occlusion and any(
+            is_occluded_overhead(
+                target_pos=(target[0], target[1]),
+                occluder_pos=(block_true_poses[d][0], block_true_poses[d][1]),
+                occluder_half_size=HALF_SIZES[d],
+                occluder_yaw=block_true_poses[d][2],
+            )
+            for d in DISTRACTOR_BLOCKS
+            if d in block_true_poses
+        )
+        self._wrist_occluded = wrist_occluded
+
+        if wrist_occluded:
+            return self._last_wrist_obs.copy()
 
         sigma = self._effective_sigma(ee_pos, target)
         wrist_noise = self.rng.normal(0, sigma, 3)
@@ -180,32 +202,7 @@ class PolicyRunner:
             target[2] + wrist_noise[2],
         ])
         self._last_wrist_obs = wrist_obs
-
-        # Overhead: occluded if any distractor covers target (when occlusion enabled)
-        overhead_occluded = self.use_occlusion and any(
-            is_occluded_overhead(
-                target_pos=(target[0], target[1]),
-                occluder_pos=(block_true_poses[d][0], block_true_poses[d][1]),
-                occluder_half_size=HALF_SIZES[d],
-                occluder_yaw=block_true_poses[d][2],
-            )
-            for d in DISTRACTOR_BLOCKS
-            if d in block_true_poses
-        )
-
-        if overhead_occluded:
-            overhead_obs = self._last_overhead_obs.copy()
-        else:
-            oh_noise_xy = self.rng.normal(0, SIGMA_OVERHEAD, 2)
-            oh_noise_theta = self.rng.normal(0, SIGMA_OVERHEAD * 10)
-            overhead_obs = np.array([
-                target[0] + oh_noise_xy[0],
-                target[1] + oh_noise_xy[1],
-                target[2] + oh_noise_theta,
-            ])
-            self._last_overhead_obs = overhead_obs
-
-        return wrist_obs, overhead_obs
+        return wrist_obs
 
     def _build_belief_obs(self, block_true_poses, ee_pos):
         """Build PF belief observations (belief PPO mode)."""
@@ -243,6 +240,7 @@ class PolicyRunner:
             for d in DISTRACTOR_BLOCKS
             if d in block_true_poses
         )
+        self._wrist_occluded = overhead_occluded  # best proxy available without camera pose
 
         if not overhead_occluded:
             oh_noise_xy = self.rng.normal(0, SIGMA_OVERHEAD, 2)
@@ -276,17 +274,17 @@ class PolicyRunner:
         """Compute joint targets from EE incremental action.
 
         Args:
-            speed_scale: multiplier for step size (>1 = faster motion in ROS)
+            speed_scale: multiplier for step size (>1 = faster motion in GUI)
 
         Returns dict {joint_name: angle} or None if IK fails.
         """
-        dx, dy, dz = action[0], action[1], action[2]
-
-        # Scale actions to ±0.02m (matching env action space), then apply speed multiplier
-        step = 0.02 * speed_scale
-        dx = np.clip(dx, -1, 1) * step
-        dy = np.clip(dy, -1, 1) * step
-        dz = np.clip(dz, -1, 1) * step
+        # SB3 model.predict() returns actions in the ORIGINAL action space bounds,
+        # NOT normalized to [-1,1]. LegoPickEnv action_space is
+        # Box([-0.02,-0.02,-0.02,-1], [0.02,0.02,0.02,1]), so dx/dy/dz are
+        # already in meters. Applying *0.02 again was a 50x under-scale bug.
+        dx = action[0] * speed_scale
+        dy = action[1] * speed_scale
+        dz = action[2] * speed_scale
 
         new_x = ee_pos[0] + dx
         new_y = ee_pos[1] + dy
@@ -326,7 +324,10 @@ class PolicyRunner:
         ee_xy = ee_pos[:2]
         dist_xy = np.linalg.norm(ee_xy - block_xy)
 
-        GRASP_THRESHOLD = 0.015  # 15mm XY only, same as lego_pick_env.py
+        # Match training env GRASP_THRESHOLD exactly (lego_pick_env.py:94).
+        # The 40mm value was a workaround for the action-scale bug that has since
+        # been fixed — the policy now navigates to within 15mm as trained.
+        GRASP_THRESHOLD = 0.015
         if dist_xy < GRASP_THRESHOLD:
             self.holding_block = True
             return True

@@ -41,6 +41,7 @@ from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import CameraInfo, Image, JointState
+from std_msgs.msg import String as StringMsg
 from tf2_msgs.msg import TFMessage
 
 
@@ -276,6 +277,9 @@ class MujocoSimNode(Node):
         # Lock for thread-safe data access
         self._lock = threading.Lock()
 
+        # Bodies pinned every physics step {body_name: [x,y,z,qw,qx,qy,qz]}
+        self._pinned_bodies = {}
+
         # Publishers
         self.clock_pub = self.create_publisher(Clock, '/clock', 10)
         self.image_pub = self.create_publisher(Image, '/wrist_camera', 10)
@@ -285,6 +289,10 @@ class MujocoSimNode(Node):
         self.create_subscription(JointState, '/joint_states', self._joint_state_cb, 10)
         self.create_subscription(
             PoseStamped, '/mujoco/set_body_pose', self._set_body_pose_cb, 10)
+        self.create_subscription(
+            PoseStamped, '/mujoco/pin_body', self._pin_body_cb, 10)
+        self.create_subscription(
+            StringMsg, '/mujoco/unpin_body', self._unpin_body_cb, 10)
 
         # Compute camera intrinsics
         self._compute_camera_intrinsics()
@@ -404,6 +412,16 @@ class MujocoSimNode(Node):
                     self.get_logger().warn(
                         f'Body "{body_name}" has no freejoint or mocap')
 
+    def _pin_body_cb(self, msg):
+        """Pin a free body so physics cannot move it — updated every physics step."""
+        p, q = msg.pose.position, msg.pose.orientation
+        self._pinned_bodies[msg.header.frame_id] = [
+            p.x, p.y, p.z, q.w, q.x, q.y, q.z]
+
+    def _unpin_body_cb(self, msg):
+        """Release a previously pinned body back to full physics."""
+        self._pinned_bodies.pop(msg.data, None)
+
     def _publish_block_poses(self):
         """Publish block body positions as TFMessage on /objects_poses_sim.
 
@@ -468,6 +486,19 @@ class MujocoSimNode(Node):
                 self.data.qpos[idx] = saved_qpos[i]
             for i, idx in enumerate(self._robot_qvel_indices):
                 self.data.qvel[idx] = saved_qvel[i]
+
+            # Pin held bodies every step so gravity cannot move them between GUI updates
+            for body_name, pose7 in self._pinned_bodies.items():
+                body_id = mujoco.mj_name2id(
+                    self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+                if body_id < 0:
+                    continue
+                jnt_id = self.model.body_jntadr[body_id]
+                if jnt_id >= 0 and self.model.jnt_type[jnt_id] == mujoco.mjtJoint.mjJNT_FREE:
+                    qadr = self.model.jnt_qposadr[jnt_id]
+                    vadr = self.model.jnt_dofadr[jnt_id]
+                    self.data.qpos[qadr:qadr+7] = pose7
+                    self.data.qvel[vadr:vadr+6] = 0.0
 
             sim_time = self.data.time
 

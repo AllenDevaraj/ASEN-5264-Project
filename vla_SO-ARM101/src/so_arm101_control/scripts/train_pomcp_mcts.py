@@ -571,13 +571,20 @@ def evaluate_mcts(n_episodes=20, n_simulations=200, n_workers=3,
             step_start = time.time()
             snapshot = serialize_state(env)
             action_idx = planner.plan(snapshot)
-            planning_times.append(time.time() - step_start)
+            plan_t = time.time() - step_start
+            planning_times.append(plan_t)
 
             action = DISCRETE_ACTIONS[action_idx]
             obs, reward, terminated, truncated, info = env.step(action)
             total_return += reward
             steps += 1
             done = terminated or truncated
+
+            print(f"  ep={ep+1:>3}/{n_episodes}  step={steps:>4}"
+                  f"  act={ACTION_NAMES[action_idx]:>5}"
+                  f"  r={reward:>7.2f}  plan={plan_t:.2f}s"
+                  f"  ok={successes}/{ep+1}",
+                  flush=True)
 
             if not done:
                 if reset_every > 0 and steps % reset_every == 0:

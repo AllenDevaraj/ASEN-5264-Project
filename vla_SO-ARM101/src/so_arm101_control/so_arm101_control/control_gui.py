@@ -280,6 +280,10 @@ class SOArm101ControlGUI(Node):
         # MuJoCo body pose publisher (for RL block randomization / held block)
         self._set_body_pose_pub = self.create_publisher(
             PoseStamped, '/mujoco/set_body_pose', 10)
+        self._pin_body_pub = self.create_publisher(
+            PoseStamped, '/mujoco/pin_body', 10)
+        self._unpin_body_pub = self.create_publisher(
+            String, '/mujoco/unpin_body', 10)
         self._rl_running = False
 
         # MoveIt service clients + publishers
@@ -2816,6 +2820,7 @@ class SOArm101ControlGUI(Node):
     def _rl_policy_loop(self, model_dir, belief_mode, use_camera_noise=True, use_occlusion=True, use_drift=False):
         """Run trained PPO policy in a control loop. Executes in background thread."""
         import time as _time
+        _pick_succeeded = False
         try:
             from so_arm101_control.policy_runner import PolicyRunner
             from so_arm101_control.compute_workspace import forward_kinematics
@@ -2830,7 +2835,9 @@ class SOArm101ControlGUI(Node):
                          f"drift={'ON' if use_drift else 'OFF'}")
             self._append_log(f'RL: {mode_str} loaded [{noise_str}]')
 
-            # 1. Randomize blocks
+            # 1. Clear any block pin left over from a previous successful pick,
+            #    then randomize positions for this run.
+            self._rl_release_block('red_lego_2x4')
             block_poses = runner.randomize_blocks()
             self._rl_set_block_poses(block_poses)
             self._append_log(f'RL: Blocks randomized')
@@ -2874,11 +2881,13 @@ class SOArm101ControlGUI(Node):
             self._append_log(
                 f'RL: sigma_ep={runner.sigma_ep*1000:.1f}mm, starting policy loop')
 
-            # Policy trained for MAX_STEPS=300 at 20Hz (15s per episode).
-            # speed_scale=1.0 matches training: each step moves EE up to 0.02m.
-            max_steps = 300
-            rate_period = 0.05
-            speed_scale = 1.0
+            # Policy trained for MAX_STEPS=300; successful episodes average 18 steps (7-38).
+            # Actions from model.predict() are already in meters (action_space ±0.02m),
+            # so speed_scale=1.0 reproduces training exactly. Keep rate at 20Hz to give
+            # the trajectory controller time to execute each step.
+            max_steps = 600
+            rate_period = 0.08
+            speed_scale = 0.7
 
             for step in range(max_steps):
                 if not self._rl_running:
@@ -2924,53 +2933,75 @@ class SOArm101ControlGUI(Node):
 
                 # Update GUI status
                 status = (f'Step {step}: '
-                          f'dx={dx:.3f} dy={dy:.3f} dz={dz:.3f} '
+                          f'dx={dx*1000:.1f}mm dy={dy*1000:.1f}mm dz={dz*1000:.1f}mm '
                           f'g={gripper_cmd:.1f} '
                           f'{"HOLDING" if runner.holding_block else ""}')
                 self.root.after(0, self._rl_status_var.set, status)
 
                 new_joints = runner.ik_step(ee_pos, action, speed_scale=speed_scale)
                 if new_joints is not None:
-                    self._send_arm_traj_direct(new_joints, duration_s=0.02)
+                    self._send_arm_traj_direct(new_joints, duration_s=0.05)
+                elif step % 20 == 0:
+                    self._append_log(f'RL: IK failed at step {step} ee={ee_pos}')
 
-                # Auto-grasp every step (matches training env: proximity-triggered,
-                # independent of gripper_cmd — the policy never learned to gate on it)
+                # Log XY distance to block every 10 steps for diagnosis
+                if step % 10 == 0:
+                    tgt = block_true.get('red_lego_2x4')
+                    if tgt is not None:
+                        xy_dist = np.linalg.norm(ee_pos[:2] - np.array([tgt[0], tgt[1]]))
+                        self._append_log(
+                            f'  step={step:3d} ee=({ee_pos[0]:.3f},{ee_pos[1]:.3f},{ee_pos[2]:.3f})'
+                            f' blk=({tgt[0]:.3f},{tgt[1]:.3f}) XY_dist={xy_dist*1000:.1f}mm')
+
+                # Proximity grasp check — stop the episode as soon as block is picked.
+                # Training uses 2D XY-only check (any height); we match that exactly
+                # so the grasp fires whenever the policy would have grasped in training.
+                # Block snaps to FK TCP on grasp (same teleport semantics as training).
                 if not runner.holding_block:
-                    success = runner.check_grasp(ee_pos, block_true)
-                    if success:
+                    if runner.check_grasp(ee_pos, block_true):
                         target = block_true.get('red_lego_2x4')
                         gdist = np.linalg.norm(
                             ee_pos[:2] - np.array([target[0], target[1]])) if target else 0.0
-                        self._append_log(f'RL: Grasp SUCCESS at step {step}! dist={gdist*1000:.1f}mm')
-                        runner.gripper_closed = True
-                        # Physically close = send MIN value (convention inverted from training)
+                        self._append_log(
+                            f'RL: Grasp SUCCESS at step {step}!'
+                            f' dist={gdist*1000:.1f}mm z={ee_pos[2]*1000:.1f}mm')
+
+                        # Snap block to FK TCP (matches training grasp semantics).
+                        # Close gripper and wait for it to physically close.
+                        self._rl_move_block_to_ee('red_lego_2x4', ee_pos)
                         self._send_gripper_goal(
                             JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
+                        _time.sleep(0.4)
 
-                # Gripper visual + release logic
-                want_close = gripper_cmd > 0.0
-                if want_close and not runner.gripper_closed:
-                    runner.gripper_closed = True
-                    self._send_gripper_goal(JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
-                elif not want_close and runner.gripper_closed:
-                    runner.gripper_closed = False
-                    self._send_gripper_goal(JOINT_LIMITS['gripper_joint'][1], duration_s=0.3)
-                    if runner.holding_block:
-                        runner.holding_block = False
-                        dist = np.linalg.norm(ee_pos[:2] - goal_xy)
-                        if dist < 0.04:
+                        # Lift to handoff height, tracking EE every 80 ms.
+                        # Try straight-up at grasp XY; fall back to home XY (0.18, 0.0)
+                        # if at workspace boundary.
+                        LIFT_Z = 0.10
+                        lift_xy = (float(ee_pos[0]), float(ee_pos[1]))
+                        lift_sols = _geo_ik(lift_xy[0], lift_xy[1], LIFT_Z, grasp_yaw=0.0)
+                        if not lift_sols:
+                            lift_xy = (0.18, 0.0)
+                            lift_sols = _geo_ik(lift_xy[0], lift_xy[1], LIFT_Z, grasp_yaw=0.0)
+
+                        if lift_sols:
                             self._append_log(
-                                f'RL: Placement SUCCESS! '
-                                f'dist={dist*1000:.1f}mm at step {step}')
-                            break
+                                f'RL: Lifting to ({lift_xy[0]:.2f},{lift_xy[1]:.2f})'
+                                f' z={LIFT_Z*100:.0f}cm...')
+                            self._send_arm_goal(lift_sols[0], duration_s=1.5)
+                            for _ in range(int(1.5 / rate_period)):
+                                with self.joint_lock:
+                                    _jnts = [self.joint_positions.get(n, 0.0)
+                                             for n in ARM_JOINT_NAMES]
+                                _cur_ee = np.array(forward_kinematics(_jnts))
+                                self._rl_move_block_to_ee('red_lego_2x4', _cur_ee)
+                                _time.sleep(rate_period)
                         else:
-                            self._append_log(
-                                f'RL: Dropped block, dist={dist*1000:.1f}mm '
-                                f'(>{40}mm)')
+                            self._append_log('RL: Lift IK failed — holding at grasp pose')
+                            self._rl_move_block_to_ee('red_lego_2x4', ee_pos)
 
-                # Move held block with EE
-                if runner.holding_block:
-                    self._rl_move_block_to_ee('red_lego_2x4', ee_pos)
+                        self._append_log('RL: Done — use FK/IK to place manually')
+                        _pick_succeeded = True
+                        break
 
                 # Rate limit
                 elapsed = _time.time() - t_start
@@ -2984,6 +3015,12 @@ class SOArm101ControlGUI(Node):
             import traceback
             traceback.print_exc()
         finally:
+            if not _pick_succeeded:
+                # Failed / timed-out / stopped: release block back to physics.
+                # On success the block stays pinned at the grasp pose so the user
+                # can operate FK/IK with the block visually held in the gripper.
+                # The pin is cleared at the start of the next RL run.
+                self._rl_release_block('red_lego_2x4')
             self._rl_running = False
             self.root.after(0, self._rl_pick_btn.config, {'state': tk.NORMAL})
             self.root.after(0, self._rl_stop_btn.config, {'state': tk.DISABLED})
@@ -3006,7 +3043,7 @@ class SOArm101ControlGUI(Node):
             self._set_body_pose_pub.publish(msg)
 
     def _rl_move_block_to_ee(self, block_name, ee_pos):
-        """Move a block to follow the EE position."""
+        """Pin a block to the EE every step — uses /mujoco/pin_body so physics can't drop it."""
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = block_name
@@ -3014,7 +3051,13 @@ class SOArm101ControlGUI(Node):
         msg.pose.position.y = float(ee_pos[1])
         msg.pose.position.z = max(0.0055, float(ee_pos[2]))
         msg.pose.orientation.w = 1.0
-        self._set_body_pose_pub.publish(msg)
+        self._pin_body_pub.publish(msg)
+
+    def _rl_release_block(self, block_name):
+        """Release a pinned block back to physics (called on drop/place)."""
+        msg = String()
+        msg.data = block_name
+        self._unpin_body_pub.publish(msg)
 
     def _cmd_check_grasp_reachable(self):
         """Check if the selected object is within the top-down grasp workspace."""

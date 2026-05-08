@@ -4,3 +4,9 @@ ERROR: mj_copyDataVisual: attempting to copy mjData while stack is in use
 Thu Mar 19 21:44:41 2026
 WARNING: Nan, Inf or huge value in QACC at DOF 20. The simulation is unstable. Time = 0.0590.
 
+Thu May  7 02:12:38 2026
+ERROR: mj_copyDataVisual: attempting to copy mjData while stack is in use
+
+Thu May  7 06:06:38 2026
+ERROR: mj_copyDataVisual: attempting to copy mjData while stack is in use
+
