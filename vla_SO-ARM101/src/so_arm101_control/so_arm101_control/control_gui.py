@@ -2910,7 +2910,7 @@ class SOArm101ControlGUI(Node):
             # so speed_scale=1.0 reproduces training exactly. Keep rate at 20Hz to give
             # the trajectory controller time to execute each step.
             max_steps = 600
-            rate_period = 0.08
+            rate_period = 0.16
             speed_scale = 0.7
 
             for step in range(max_steps):
@@ -2997,22 +2997,12 @@ class SOArm101ControlGUI(Node):
                             JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
                         _time.sleep(0.4)
 
-                        # Lift to handoff height, tracking EE every 80 ms.
-                        # Try straight-up at grasp XY; fall back to home XY (0.18, 0.0)
-                        # if at workspace boundary.
-                        LIFT_Z = 0.10
-                        lift_xy = (float(ee_pos[0]), float(ee_pos[1]))
-                        lift_sols = _geo_ik(lift_xy[0], lift_xy[1], LIFT_Z, grasp_yaw=0.0)
-                        if not lift_sols:
-                            lift_xy = (0.18, 0.0)
-                            lift_sols = _geo_ik(lift_xy[0], lift_xy[1], LIFT_Z, grasp_yaw=0.0)
-
-                        if lift_sols:
-                            self._append_log(
-                                f'RL: Lifting to ({lift_xy[0]:.2f},{lift_xy[1]:.2f})'
-                                f' z={LIFT_Z*100:.0f}cm...')
-                            self._send_arm_goal(lift_sols[0], duration_s=1.5)
-                            for _ in range(int(1.5 / rate_period)):
+                        # Return to home pose (0.18, 0, 0.06) carrying block.
+                        home_carry_sols = _geo_ik(0.18, 0.0, 0.06, grasp_yaw=0.0)
+                        if home_carry_sols:
+                            self._append_log('RL: Returning to home with block...')
+                            self._send_arm_goal(home_carry_sols[0], duration_s=2.0)
+                            for _ in range(int(2.0 / rate_period)):
                                 with self.joint_lock:
                                     _jnts = [self.joint_positions.get(n, 0.0)
                                              for n in ARM_JOINT_NAMES]
@@ -3020,10 +3010,13 @@ class SOArm101ControlGUI(Node):
                                 self._rl_move_block_to_ee('red_lego_2x4', _cur_ee)
                                 _time.sleep(rate_period)
                         else:
-                            self._append_log('RL: Lift IK failed — holding at grasp pose')
+                            self._append_log('RL: Home IK failed — holding at grasp pose')
                             self._rl_move_block_to_ee('red_lego_2x4', ee_pos)
 
                         self._append_log('RL: Done — use FK/IK to place manually')
+                        threading.Thread(
+                            target=self._rl_hold_block_loop,
+                            args=('red_lego_2x4',), daemon=True).start()
                         _pick_succeeded = True
                         break
 
@@ -3066,7 +3059,7 @@ class SOArm101ControlGUI(Node):
             from so_arm101_control.compute_workspace import forward_kinematics
 
             runner = WorldModelPOMCPRunner(
-                model_dir, n_rollouts=200, max_depth=20,
+                model_dir, n_rollouts=50, max_depth=10,
                 use_camera_noise=use_camera_noise,
                 use_occlusion=use_occlusion,
                 use_drift=use_drift,
@@ -3182,21 +3175,12 @@ class SOArm101ControlGUI(Node):
                             JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
                         _time.sleep(0.4)
 
-                        # Lift to handoff height (same logic as PPO loop)
-                        LIFT_Z = 0.10
-                        lift_xy = (float(ee_pos[0]), float(ee_pos[1]))
-                        lift_sols = _geo_ik(lift_xy[0], lift_xy[1], LIFT_Z, grasp_yaw=0.0)
-                        if not lift_sols:
-                            lift_xy  = (0.18, 0.0)
-                            lift_sols = _geo_ik(lift_xy[0], lift_xy[1], LIFT_Z, grasp_yaw=0.0)
-
                         self._rl_move_block_to_ee(TARGET_BLOCK, ee_pos)
-                        if lift_sols:
-                            self._append_log(
-                                f'POMCP: lifting to ({lift_xy[0]:.2f},{lift_xy[1]:.2f})'
-                                f' z={LIFT_Z*100:.0f}cm')
-                            self._send_arm_goal(lift_sols[0], duration_s=1.5)
-                            for _ in range(int(1.5 / rate_period)):
+                        home_carry_sols = _geo_ik(0.18, 0.0, 0.06, grasp_yaw=0.0)
+                        if home_carry_sols:
+                            self._append_log('POMCP: Returning to home with block...')
+                            self._send_arm_goal(home_carry_sols[0], duration_s=2.0)
+                            for _ in range(int(2.0 / rate_period)):
                                 with self.joint_lock:
                                     _jnts = [self.joint_positions.get(n, 0.0)
                                              for n in ARM_JOINT_NAMES]
@@ -3204,9 +3188,12 @@ class SOArm101ControlGUI(Node):
                                 self._rl_move_block_to_ee(TARGET_BLOCK, _cur_ee)
                                 _time.sleep(rate_period)
                         else:
-                            self._append_log('POMCP: lift IK failed — holding at grasp pose')
+                            self._append_log('POMCP: home IK failed — holding at grasp pose')
 
                         self._append_log('POMCP: Done — use FK/IK to place manually')
+                        threading.Thread(
+                            target=self._rl_hold_block_loop,
+                            args=(TARGET_BLOCK,), daemon=True).start()
                         _succeeded = True
                         break
 
@@ -3273,6 +3260,21 @@ class SOArm101ControlGUI(Node):
         msg = String()
         msg.data = block_name
         self._unpin_body_pub.publish(msg)
+
+    def _rl_hold_block_loop(self, block_name):
+        """Keep block pinned to current EE FK after a successful pick.
+
+        Runs at 10 Hz in a daemon thread. Exits automatically when a new pick
+        starts (_rl_running becomes True) so the new loop can release the block.
+        """
+        import time as _time
+        from so_arm101_control.compute_workspace import forward_kinematics as _fk
+        while not self._rl_running:
+            with self.joint_lock:
+                _jnts = [self.joint_positions.get(n, 0.0) for n in ARM_JOINT_NAMES]
+            ee = np.array(_fk(_jnts))
+            self._rl_move_block_to_ee(block_name, ee)
+            _time.sleep(0.1)
 
     def _cmd_check_grasp_reachable(self):
         """Check if the selected object is within the top-down grasp workspace."""
