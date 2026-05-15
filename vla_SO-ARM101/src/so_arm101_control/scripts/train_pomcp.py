@@ -76,7 +76,12 @@ def collect_transitions(model_path, n_transitions=50000, seed=0):
         gripper_next = 1.0 if env._gripper_closed else 0.0
         next_state = np.concatenate([env._ee_pos, mu_next[0], sigma_next[0], [gripper_next]])
 
-        grasp = 1.0 if info.get("grasp_result") == "success" else 0.0
+        # Env now reports grasp_result as grabbed block name (or None), not "success".
+        # Keep this label tied to explicit close actions so the grasp head matches
+        # POMCP's CLOSE action semantics.
+        grasped_target = (info.get("grasp_result") == "red_lego_2x4")
+        close_cmd = bool(action[3] > 0.0)
+        grasp = 1.0 if (close_cmd and grasped_target) else 0.0
 
         states.append(state)
         actions.append(action)
@@ -91,6 +96,13 @@ def collect_transitions(model_path, n_transitions=50000, seed=0):
             print(f"  Collected {collected}/{n_transitions} transitions")
 
     env.close()
+
+    positive_grasps = int(np.sum(grasp_successes))
+    if positive_grasps == 0:
+        print("WARNING: collected 0 positive grasp labels. "
+              "POMCP grasp head will be degenerate.")
+    else:
+        print(f"Collected {positive_grasps} positive close-and-grasp transitions.")
 
     return {
         'states': np.array(states, dtype=np.float32),

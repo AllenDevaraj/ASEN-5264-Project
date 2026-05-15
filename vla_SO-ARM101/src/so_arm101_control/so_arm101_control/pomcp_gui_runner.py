@@ -23,7 +23,7 @@ import numpy as np
 from so_arm101_control.compute_workspace import geometric_ik
 from so_arm101_control.occlusion import is_occluded_overhead
 from so_arm101_control.particle_filter import ParticleFilter
-from so_arm101_control.pomcp_heuristic import heuristic_action
+from so_arm101_control.pomcp_heuristic import heuristic_action as _shared_heuristic_action  # noqa: F401
 from so_arm101_control.world_model import WorldModel
 
 # ── Constants matching lego_pick_env.py ────────────────────────────────────
@@ -36,6 +36,7 @@ HALF_SIZES = {
     "blue_lego_2x2_b": (0.020, 0.010),
 }
 TABLE_Z        = 0.0055
+GRASP_Z_HEIGHT = 0.015  # height at which the heuristic switches from LOWER to CLOSE
 SIGMA_OVERHEAD = 0.005
 SIGMA_LOW      = 0.003
 SIGMA_HIGH     = 0.015
@@ -203,28 +204,7 @@ class WorldModelPOMCPRunner:
             return 0.0
 
         action_idx          = node.best_ucb(self.ucb_c)
-        action              = DISCRETE_ACTIONS[action_idx]
-        next_state, grasp_p = self.wm.predict(state, action)
-        next_state[3:6]     = state[3:6]   # freeze block_mu — WM drifts it toward EE
-
-        holding = state[9] > 0.5
-        reward  = -1.0  # step cost
-
-        terminal = False
-        if action_idx == 6:  # CLOSE
-            if self.rng.random() < grasp_p:
-                reward += 20.0   # grasp bonus
-                dist = np.linalg.norm(next_state[:2] - goal_pos)
-                if dist < GOAL_THRESHOLD:
-                    reward  += 80.0
-                    terminal = True
-            else:
-                reward -= 5.0
-        elif action_idx == 7 and holding:   # OPEN while carrying
-            dist = np.linalg.norm(next_state[:2] - goal_pos)
-            if dist < GOAL_THRESHOLD:
-                reward  += 80.0
-                terminal = True
+        next_state, reward, terminal = self._transition(state, action_idx, goal_pos)
 
         if terminal:
             self._backup(node, action_idx, reward)
@@ -246,35 +226,129 @@ class WorldModelPOMCPRunner:
         total    = 0.0
         discount = 1.0
         for _ in range(depth, self.max_depth):
-            ee_pos    = state[:3]
-            block_mu  = state[3:6]
-            holding   = state[9] > 0.5
-            h_idx     = heuristic_action(
-                ee_pos=ee_pos, block_mu=block_mu,
-                goal_xy=goal_pos, holding=holding,
-                gripper_closed=holding,
-            )
-            action              = DISCRETE_ACTIONS[h_idx]
-            next_state, grasp_p = self.wm.predict(state, action)
-            next_state[3:6]     = state[3:6]   # freeze block_mu — WM drifts it toward EE
-
-            r = -1.0
-            if h_idx == 6 and self.rng.random() < grasp_p:
-                r += 20.0
-                if np.linalg.norm(next_state[:2] - goal_pos) < GOAL_THRESHOLD:
-                    r     += 80.0
-                    total += discount * r
-                    break
-            elif h_idx == 7 and holding:
-                if np.linalg.norm(next_state[:2] - goal_pos) < GOAL_THRESHOLD:
-                    r     += 80.0
-                    total += discount * r
-                    break
+            h_idx = self._heuristic_action(state, goal_pos)
+            next_state, r, terminal = self._transition(state, h_idx, goal_pos)
+            if terminal:
+                total += discount * r
+                break
 
             total    += discount * r
             discount *= self.gamma
             state     = next_state
         return total
+
+    def _heuristic_action(self, state, goal_pos):
+        """Greedy policy aligned with the GUI transition's grasp geometry.
+
+        The shared pomcp_heuristic.heuristic_action switches to CLOSE at
+        xy_dist<25mm but our env grasps only at <15mm. That mismatch made
+        rollouts spam CLOSE between 15-25mm, eating -5 penalties and
+        flattening MCTS values. This version drives XY inside 12mm before
+        lowering and only closes inside GRASP_THRESHOLD.
+        """
+        ee_pos   = state[:3]
+        block_mu = state[3:6]
+        holding  = state[9] > 0.5
+
+        if not holding:
+            dx = float(block_mu[0] - ee_pos[0])
+            dy = float(block_mu[1] - ee_pos[1])
+            xy_dist = math.sqrt(dx * dx + dy * dy)
+            ee_z = float(ee_pos[2])
+
+            if xy_dist >= GRASP_THRESHOLD * 0.6:  # 9 mm — match GUI 10mm gate
+                if abs(dx) >= abs(dy):
+                    return 0 if dx > 0 else 1
+                return 2 if dy > 0 else 3
+            if ee_z > GRASP_Z_HEIGHT:
+                return 4  # LOWER
+            return 6      # CLOSE — XY tight, EE low
+
+        # Holding: navigate to goal then OPEN.
+        dx = float(goal_pos[0] - ee_pos[0])
+        dy = float(goal_pos[1] - ee_pos[1])
+        xy_dist = math.sqrt(dx * dx + dy * dy)
+        if xy_dist >= GOAL_THRESHOLD * 0.5:
+            if abs(dx) >= abs(dy):
+                return 0 if dx > 0 else 1
+            return 2 if dy > 0 else 3
+        return 7  # OPEN
+
+    def _transition(self, state, action_idx, goal_pos):
+        """Rollout transition + reward model for MCTS.
+
+        Hybrid: use the commanded action for EE kinematics (the WM was
+        trained on continuous PPO actions and drifts on discrete inputs),
+        keep belief mean anchored, and use a geometry-grounded close-success
+        estimate with the learned grasp head as a weak prior.
+
+        Mirrors the auto-grasp semantics of lego_pick_env: any motion that
+        lands EE within GRASP_THRESHOLD of the belief mean grants holding,
+        not only an explicit CLOSE action.
+        """
+        action = DISCRETE_ACTIONS[action_idx]
+        next_state = state.copy()
+        # Apply commanded EE delta directly (deterministic, in-distribution).
+        next_state[0] += float(action[0])
+        next_state[1] += float(action[1])
+        next_state[2] += float(action[2])
+        # Clamp Z to physical bounds matching the env.
+        next_state[2] = float(np.clip(next_state[2], EE_Z_MIN, EE_Z_MAX))
+        # Belief mean / sigma stay anchored across the rollout (the WM head
+        # is unreliable on these and the GUI's PF owns the real belief).
+        next_state[3:9] = state[3:9]
+
+        holding = state[9] > 0.5
+        reward = -1.0
+        terminal = False
+
+        block_xy = next_state[3:5]
+        ee_xy = next_state[:2]
+        dist_xy = float(np.linalg.norm(ee_xy - block_xy))
+
+        # Dense proximity shaping (mirrors lego_pick_env reward).
+        # Critical for MCTS: with max_depth=20, heuristic rollouts often
+        # can't reach the 15mm grasp radius in time, so shaping is what
+        # separates good-direction actions from bad-direction actions.
+        if not holding:
+            prev_dist = float(np.linalg.norm(state[:2] - state[3:5]))
+            improvement = prev_dist - dist_xy
+            reward += 3.0 * float(np.clip(improvement / 0.02, -1.0, 1.0))
+            if dist_xy < 0.025:
+                reward += 2.0 * (1.0 - dist_xy / 0.025)
+
+        if holding:
+            # Carrying — only OPEN at goal terminates with placement bonus.
+            next_state[9] = 1.0
+            if action_idx == 7:
+                dist_goal = float(np.linalg.norm(ee_xy - goal_pos))
+                if dist_goal < GOAL_THRESHOLD:
+                    reward += 80.0
+                    terminal = True
+                next_state[9] = 0.0
+        else:
+            # Auto-grasp on proximity (matches env _attempt_grasp).
+            if dist_xy < GRASP_THRESHOLD:
+                # Auto-grasp on proximity. Blend the learned world-model grasp
+                # head as a weak prior only when explicit CLOSE is selected
+                # (lazy WM call — keeps the rollout loop fast on CPU).
+                p_auto = 0.9
+                if action_idx == 6:
+                    _, grasp_p_model = self.wm.predict(state, action)
+                    p_auto = max(p_auto, 0.5 * float(grasp_p_model))
+                if self.rng.random() < p_auto:
+                    reward += 20.0
+                    next_state[9] = 1.0
+                else:
+                    next_state[9] = 0.0
+            elif action_idx == 6:
+                # Explicit CLOSE far from block — penalise to discourage spam.
+                reward -= 5.0
+                next_state[9] = 0.0
+            else:
+                next_state[9] = 0.0
+
+        return next_state, reward, terminal
 
     @staticmethod
     def _backup(node, action_idx, total):

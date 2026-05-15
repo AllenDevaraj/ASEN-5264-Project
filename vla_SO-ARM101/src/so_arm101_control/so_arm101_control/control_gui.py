@@ -2886,7 +2886,7 @@ class SOArm101ControlGUI(Node):
             with self.objects_lock:
                 obj_data = dict(self.objects_data)
             block_true = {}
-            for name in ['red_lego_2x4', 'blue_lego_2x2']:
+            for name in ['red_lego_2x4', 'blue_lego_2x2', 'blue_lego_2x2_b']:
                 if name in obj_data:
                     d = obj_data[name]
                     yaw = math.atan2(
@@ -3001,14 +3001,20 @@ class SOArm101ControlGUI(Node):
                         home_carry_sols = _geo_ik(0.18, 0.0, 0.06, grasp_yaw=0.0)
                         if home_carry_sols:
                             self._append_log('RL: Returning to home with block...')
-                            self._send_arm_goal(home_carry_sols[0], duration_s=2.0)
-                            for _ in range(int(2.0 / rate_period)):
+                            carry_duration = 2.0
+                            self._send_arm_goal(
+                                home_carry_sols[0], duration_s=carry_duration)
+                            # 50 Hz block follow so the block visually tracks
+                            # the gripper. The outer rate_period (0.16s) is too
+                            # coarse for smooth tracking during this 2s sweep.
+                            carry_tick = 0.02
+                            for _ in range(int(carry_duration / carry_tick)):
                                 with self.joint_lock:
                                     _jnts = [self.joint_positions.get(n, 0.0)
                                              for n in ARM_JOINT_NAMES]
                                 _cur_ee = np.array(forward_kinematics(_jnts))
                                 self._rl_move_block_to_ee('red_lego_2x4', _cur_ee)
-                                _time.sleep(rate_period)
+                                _time.sleep(carry_tick)
                         else:
                             self._append_log('RL: Home IK failed — holding at grasp pose')
                             self._rl_move_block_to_ee('red_lego_2x4', ee_pos)
@@ -3059,7 +3065,7 @@ class SOArm101ControlGUI(Node):
             from so_arm101_control.compute_workspace import forward_kinematics
 
             runner = WorldModelPOMCPRunner(
-                model_dir, n_rollouts=20, max_depth=20,
+                model_dir, n_rollouts=300, max_depth=20,
                 use_camera_noise=use_camera_noise,
                 use_occlusion=use_occlusion,
                 use_drift=use_drift,
@@ -3089,7 +3095,7 @@ class SOArm101ControlGUI(Node):
             with self.objects_lock:
                 obj_data = dict(self.objects_data)
             block_true = {}
-            for name in [TARGET_BLOCK, 'blue_lego_2x2']:
+            for name in [TARGET_BLOCK, 'blue_lego_2x2', 'blue_lego_2x2_b']:
                 if name in obj_data:
                     d = obj_data[name]
                     yaw = math.atan2(2.0 * d.get('qw', 1.0) * d.get('qz', 0.0),
@@ -3106,7 +3112,16 @@ class SOArm101ControlGUI(Node):
             self._append_log(f'POMCP: sigma_ep={runner.sigma_ep*1000:.1f}mm, starting loop')
 
             max_steps  = 600
-            rate_period = 0.08
+            # POMCP plan is ~0.15s on CPU (300 rollouts × 20 depth, lazy WM).
+            # Keep the loop snappy so the gripper visually tracks each step.
+            rate_period = 0.25
+            # Tight GUI-side grasp gate. The env auto-grasps at 15mm XY, but
+            # at that radius POMCP's discrete 15mm steps + belief offset cause
+            # a visible block-snap. Require a closer/lower approach (matching
+            # the pose PPO naturally reaches with continuous control) so the
+            # snap is invisible.
+            GUI_GRASP_XY = 0.010   # 10 mm — half the env threshold
+            GUI_GRASP_Z  = 0.030   # 30 mm above table
 
             for step in range(max_steps):
                 if not self._rl_running:
@@ -3124,7 +3139,7 @@ class SOArm101ControlGUI(Node):
                 # Read latest block poses
                 with self.objects_lock:
                     obj_data = dict(self.objects_data)
-                for name in [TARGET_BLOCK, 'blue_lego_2x2']:
+                for name in [TARGET_BLOCK, 'blue_lego_2x2', 'blue_lego_2x2_b']:
                     if name in obj_data:
                         d = obj_data[name]
                         yaw = math.atan2(2.0 * d.get('qw', 1.0) * d.get('qz', 0.0),
@@ -3164,41 +3179,55 @@ class SOArm101ControlGUI(Node):
                 if runner.holding_block:
                     self._rl_move_block_to_ee(TARGET_BLOCK, ee_pos)
 
-                # Grasp check — stop at pick, same as PPO modes
-                if not runner.holding_block and action_idx == 6:
-                    if runner.check_grasp(ee_pos, block_true):
-                        target = block_true.get(TARGET_BLOCK)
-                        gdist = (np.linalg.norm(ee_pos[:2] - np.array([target[0], target[1]]))
-                                 if target else 0.0)
-                        self._append_log(
-                            f'POMCP: Grasp! step={step} dist={gdist*1000:.1f}mm')
+                # Grasp gate — auto-grasp once EE is tightly aligned with the
+                # true block, in both XY (10mm) and Z (≤30mm above table).
+                # Tighter than the env's 15mm radius because POMCP's discrete
+                # 15mm steps would otherwise snap the block a visible distance.
+                # Matches the close-in pose PPO naturally reaches.
+                if not runner.holding_block:
+                    target = block_true.get(TARGET_BLOCK)
+                    if target is not None:
+                        gdist = float(np.linalg.norm(
+                            ee_pos[:2] - np.array([target[0], target[1]])))
+                        if gdist < GUI_GRASP_XY and ee_pos[2] < GUI_GRASP_Z:
+                            runner.holding_block = True
+                            runner.gripper_closed = True
+                            self._append_log(
+                                f'POMCP: Grasp! step={step} dist={gdist*1000:.1f}mm '
+                                f'z={ee_pos[2]*1000:.1f}mm')
 
-                        # Close gripper physically
-                        self._send_gripper_goal(
-                            JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
-                        _time.sleep(0.4)
+                            # Close gripper physically
+                            self._send_gripper_goal(
+                                JOINT_LIMITS['gripper_joint'][0], duration_s=0.3)
+                            _time.sleep(0.4)
 
-                        self._rl_move_block_to_ee(TARGET_BLOCK, ee_pos)
-                        home_carry_sols = _geo_ik(0.18, 0.0, 0.06, grasp_yaw=0.0)
-                        if home_carry_sols:
-                            self._append_log('POMCP: Returning to home with block...')
-                            self._send_arm_goal(home_carry_sols[0], duration_s=2.0)
-                            for _ in range(int(2.0 / rate_period)):
-                                with self.joint_lock:
-                                    _jnts = [self.joint_positions.get(n, 0.0)
-                                             for n in ARM_JOINT_NAMES]
-                                _cur_ee = np.array(forward_kinematics(_jnts))
-                                self._rl_move_block_to_ee(TARGET_BLOCK, _cur_ee)
-                                _time.sleep(rate_period)
-                        else:
-                            self._append_log('POMCP: home IK failed — holding at grasp pose')
+                            self._rl_move_block_to_ee(TARGET_BLOCK, ee_pos)
+                            home_carry_sols = _geo_ik(0.18, 0.0, 0.06, grasp_yaw=0.0)
+                            if home_carry_sols:
+                                self._append_log('POMCP: Returning to home with block...')
+                                carry_duration = 2.0
+                                self._send_arm_goal(
+                                    home_carry_sols[0], duration_s=carry_duration)
+                                # High-rate block follow (50 Hz) so the block
+                                # visually tracks the gripper, not the planner
+                                # loop's rate_period.
+                                carry_tick = 0.02
+                                for _ in range(int(carry_duration / carry_tick)):
+                                    with self.joint_lock:
+                                        _jnts = [self.joint_positions.get(n, 0.0)
+                                                 for n in ARM_JOINT_NAMES]
+                                    _cur_ee = np.array(forward_kinematics(_jnts))
+                                    self._rl_move_block_to_ee(TARGET_BLOCK, _cur_ee)
+                                    _time.sleep(carry_tick)
+                            else:
+                                self._append_log('POMCP: home IK failed — holding at grasp pose')
 
-                        self._append_log('POMCP: Done — use FK/IK to place manually')
-                        threading.Thread(
-                            target=self._rl_hold_block_loop,
-                            args=(TARGET_BLOCK,), daemon=True).start()
-                        _succeeded = True
-                        break
+                            self._append_log('POMCP: Done — use FK/IK to place manually')
+                            threading.Thread(
+                                target=self._rl_hold_block_loop,
+                                args=(TARGET_BLOCK,), daemon=True).start()
+                            _succeeded = True
+                            break
 
                 # Per-step diagnostic every 10 steps
                 if step % 10 == 0:
@@ -3267,8 +3296,9 @@ class SOArm101ControlGUI(Node):
     def _rl_hold_block_loop(self, block_name):
         """Keep block pinned to current EE FK after a successful pick.
 
-        Runs at 10 Hz in a daemon thread. Exits automatically when a new pick
-        starts (_rl_running becomes True) so the new loop can release the block.
+        Runs at 50 Hz so the block visually tracks the gripper during user
+        FK/IK manipulation. Exits automatically when a new pick starts
+        (_rl_running becomes True) so the new loop can release the block.
         """
         import time as _time
         from so_arm101_control.compute_workspace import forward_kinematics as _fk
@@ -3277,7 +3307,7 @@ class SOArm101ControlGUI(Node):
                 _jnts = [self.joint_positions.get(n, 0.0) for n in ARM_JOINT_NAMES]
             ee = np.array(_fk(_jnts))
             self._rl_move_block_to_ee(block_name, ee)
-            _time.sleep(0.1)
+            _time.sleep(0.02)
 
     def _cmd_check_grasp_reachable(self):
         """Check if the selected object is within the top-down grasp workspace."""
