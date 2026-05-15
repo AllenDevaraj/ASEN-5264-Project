@@ -205,6 +205,7 @@ class WorldModelPOMCPRunner:
         action_idx          = node.best_ucb(self.ucb_c)
         action              = DISCRETE_ACTIONS[action_idx]
         next_state, grasp_p = self.wm.predict(state, action)
+        next_state[3:6]     = state[3:6]   # freeze block_mu — WM drifts it toward EE
 
         holding = state[9] > 0.5
         reward  = -1.0  # step cost
@@ -255,6 +256,7 @@ class WorldModelPOMCPRunner:
             )
             action              = DISCRETE_ACTIONS[h_idx]
             next_state, grasp_p = self.wm.predict(state, action)
+            next_state[3:6]     = state[3:6]   # freeze block_mu — WM drifts it toward EE
 
             r = -1.0
             if h_idx == 6 and self.rng.random() < grasp_p:

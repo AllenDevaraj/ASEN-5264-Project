@@ -3059,7 +3059,7 @@ class SOArm101ControlGUI(Node):
             from so_arm101_control.compute_workspace import forward_kinematics
 
             runner = WorldModelPOMCPRunner(
-                model_dir, n_rollouts=50, max_depth=10,
+                model_dir, n_rollouts=20, max_depth=20,
                 use_camera_noise=use_camera_noise,
                 use_occlusion=use_occlusion,
                 use_drift=use_drift,
@@ -3136,7 +3136,9 @@ class SOArm101ControlGUI(Node):
                     runner.update_belief(block_true, ee_pos)
 
                 state      = runner.build_state(ee_pos)
+                _plan_t0   = _time.time()
                 action_idx = runner.plan(state, goal_xy)
+                _plan_ms   = (_time.time() - _plan_t0) * 1000
                 action     = DISCRETE_ACTIONS[action_idx]
                 act_name   = ACTION_NAMES[action_idx]
 
@@ -3145,6 +3147,7 @@ class SOArm101ControlGUI(Node):
                 status = (f'Step {step}: {act_name}  '
                           f'μ=({mu[0][0]:.2f},{mu[0][1]:.2f})  '
                           f'σ={sigma[0][0]*1000:.1f}mm  '
+                          f'plan={_plan_ms:.0f}ms  '
                           f'{"HOLDING" if runner.holding_block else ""}')
                 self.root.after(0, self._rl_status_var.set, status)
 
@@ -3153,7 +3156,7 @@ class SOArm101ControlGUI(Node):
                 if not is_gripper:
                     new_joints = runner.ik_step(ee_pos, action_idx)
                     if new_joints is not None:
-                        self._send_arm_traj_direct(new_joints, duration_s=rate_period)
+                        self._send_arm_traj_direct(new_joints, duration_s=0.05)
                     elif step % 20 == 0:
                         self._append_log(f'POMCP: IK fail at step {step}')
 

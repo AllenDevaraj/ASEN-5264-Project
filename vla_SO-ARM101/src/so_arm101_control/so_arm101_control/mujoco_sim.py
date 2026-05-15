@@ -297,17 +297,12 @@ class MujocoSimNode(Node):
         # Compute camera intrinsics
         self._compute_camera_intrinsics()
 
-        # Renderer for camera images
+        # Renderer created inside viewer thread to avoid EGL cross-thread conflict.
         self._renderer = None
-        self._init_renderer()
 
         # Physics timer (1kHz)
         physics_period = 1.0 / physics_rate
         self.create_timer(physics_period, self._physics_step)
-
-        # Camera render timer (30Hz)
-        cam_period = 1.0 / self.cam_fps
-        self.create_timer(cam_period, self._render_camera)
 
         # Block pose publisher (10Hz) — publishes mocap body positions as TFMessage
         self._block_names = ['red_lego_2x4', 'green_lego_2x3', 'blue_lego_2x2']
@@ -345,14 +340,26 @@ class MujocoSimNode(Node):
             self._renderer = None
 
     def _start_viewer(self):
-        """Start MuJoCo interactive viewer in a background thread."""
+        """Start MuJoCo interactive viewer in a background thread.
+
+        Camera rendering also runs here so all EGL operations share one thread.
+        Creating mujoco.Renderer in a separate thread from viewer.sync() would
+        cause EGL_BAD_ACCESS when two threads contest the same EGL display.
+        """
         def _run_viewer():
             try:
+                self._init_renderer()   # EGL context created in THIS thread
+                cam_interval = 1.0 / self.cam_fps
+                last_cam = 0.0
                 with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
                     self._viewer_handle = viewer
                     while viewer.is_running():
                         with self._lock:
                             viewer.sync()
+                        now = time.time()
+                        if now - last_cam >= cam_interval:
+                            self._render_camera()
+                            last_cam = now
                         time.sleep(0.02)
             except Exception as e:
                 self.get_logger().warn(f'Viewer error: {e}')
