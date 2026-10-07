@@ -1695,3 +1695,16 @@ The positive idle return is a shaping artefact in the logged return. Report succ
 - No reward or protocol change mid-matrix. Changing it would invalidate 7.6 h of finished runs on a hunch, and per-method tuning breaks the identical-budget comparison.
 - recurrent_s0 finishes its 1M steps. If it stays below 5%, it is reported as a learning failure within the shared budget, with this diagnosis.
 - If compute remains after the matrix and POMCP, run a separately labelled tuned-LSTM ablation (e.g. 2M steps, lower lr, or a commit-exploration bonus).
+
+## v2 — recurrent_s0 finished (2026-10-08 02:42)
+
+1M steps in 3 h 34 min (the LSTM is the slowest method).
+
+Last 1000 episodes:
+- 0.5% success
+- 0.29 attempts
+- 186 decisions per episode
+
+It never recovered from the commit-avoidance collapse logged at 01:10. As ruled there, it stays in the matrix unchanged and is reported as a learning failure under the shared 1M-step budget.
+
+oracle_s1 started at 02:42.
