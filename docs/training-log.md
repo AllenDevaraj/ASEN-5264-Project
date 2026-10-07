@@ -1637,3 +1637,22 @@ The contrast clip `runs/footage/preview/belief_vs_plain_ep1.mp4` (21 s, 1920×54
 - **Plain PPO:** misses twice next to its stale reading; each miss physically shoves the brick.
 
 Free memory dipped to 2.4 GB while footage and training ran together (the desktop apps hold ~4 GB), so side jobs stay short and rare.
+
+## v2 — POMCP/footage review fixes (2026-10-07 ~22:30)
+
+A fresh-context review (Opus) of the plan-2 and footage code found 0 Critical, 3 Important and 6 Minor issues. The snapshot/restore core was confirmed leak-free. Fixed, each test-first:
+
+1. **Rollout never committed for about half of target offsets.** It required < 4 mm radial on a 10 mm move grid, so it oscillated ±5 mm. It now uses a per-axis gate of half a step (always reachable, ≤ 7 mm diagonal). Without this, POMCP values would have been biased toward early commits.
+2. **Latency counted watchdog SIGSTOP pauses.** Decisions now record `cpu_s` (`process_time`), and the budget figure plots CPU time.
+3. **World-model validation split by transition**, which leaked same-episode neighbours. The collector now saves episode ids, and the split holds out whole episodes.
+4. **Commit rows trained the Δ head.** The carry-to-goal jump swamped per-step dynamics. They now train only the grasp head; commit is terminal for the planner.
+5. **Footage:** the cache is now keyed by method, run seed and σ. The belief is hidden only while the brick is lifted or after the final successful lift, not forever after a slipped lift.
+
+Deferred minors:
+- WM commit-value approximations, to be named in the write-up
+- a stricter planning no-leak test
+- RL reference line on episodes 0–49
+- `t0` identity check
+- particle–distractor overlap
+
+Suite: 80/80.
