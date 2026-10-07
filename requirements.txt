@@ -13,3 +13,4 @@ pyyaml>=6
 tensorboard>=2.17
 pillow>=10
 pytest>=8
+tabulate==0.10.0

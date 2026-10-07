@@ -124,7 +124,7 @@ A memoryless policy commits roughly 10 mm off even at 2 mm noise. Trained across
   - a commit is terminal and pays 15·P(grasp) − (1 − P(grasp)), assuming the place always succeeds;
   - the grasp's time cost is ignored;
   - after a miss, the remaining attempts are ignored.
-- **Small training budget:** 1M steps per run, chosen to fit a laptop. Learning curves (§A.2) show whether methods had plateaued.
+- **Small training budget:** 1M steps per run, chosen to fit a laptop. The seed-0 learning curves (`docs/figs/v2/learning_curves.png`) show the oracle and plain PPO had plateaued. Belief PPO was still climbing (42% at 450k steps, 52% at 1M), so its numbers are a lower bound.
 
 ## Appendix
 

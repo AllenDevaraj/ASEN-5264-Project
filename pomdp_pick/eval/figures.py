@@ -28,6 +28,42 @@ def success_vs_sigma(df, path):
     fig.savefig(path)
 
 
+def learning_curves(runs_root, path, window=1000):
+    """Rolling training success vs environment steps; mean across seeds with min-max band."""
+    import glob
+    from pathlib import Path
+    import numpy as np
+    runs_root = Path(runs_root)
+    fig, ax = plt.subplots(figsize=(6.4, 4.0), dpi=150)
+    finals = []
+    methods = sorted({p.parent.parent.parent.name for p in runs_root.glob("*/seed*/monitor/*.csv")})
+    for m in methods:
+        curves = []
+        for sd in sorted((runs_root / m).glob("seed*")):
+            fs = sorted(glob.glob(str(sd / "monitor" / "*.csv")))
+            if not fs:
+                continue
+            d = pd.concat([pd.read_csv(f, skiprows=1) for f in fs]).sort_values("t")
+            steps = d.l.cumsum().to_numpy()
+            succ = d.success.rolling(window, min_periods=max(1, window // 5)).mean().to_numpy()
+            curves.append((steps, succ))
+        if not curves:
+            continue
+        grid = np.linspace(0, min(c[0][-1] for c in curves), 200)
+        Y = np.array([np.interp(grid, s, np.nan_to_num(y, nan=0.0)) for s, y in curves])
+        ax.plot(grid / 1e6, Y.mean(0) * 100, color=COLORS.get(m), lw=2, label=f"{m} (n={len(curves)})")
+        ax.fill_between(grid / 1e6, Y.min(0) * 100, Y.max(0) * 100, color=COLORS.get(m), alpha=0.15, lw=0)
+        finals.append(dict(method=m, n_seeds=len(curves), final=float(Y[:, -1].mean())))
+    ax.set_xlabel("Environment steps (millions)")
+    ax.set_ylabel(f"Training success, rolling {window} episodes (%)")
+    ax.set_ylim(0, 100)
+    ax.grid(alpha=0.3)
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(path)
+    return pd.DataFrame(finals)
+
+
 def budget_table(df):
     """Success (Wilson 95% CI) and mean decision latency per planner and simulation budget."""
     rows = []

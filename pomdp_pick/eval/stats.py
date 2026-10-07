@@ -47,6 +47,36 @@ def per_cell(df):
     return g
 
 
+ORDER = ["oracle", "belief", "recurrent", "framestack", "plain"]
+
+
+def markdown_tables(df, reps=5000, ref="belief"):
+    """Report-ready Markdown: per-σ success with Wilson CIs, IQM with bootstrap CIs, P(ref > X)."""
+    methods = [m for m in ORDER if m in set(df.method)] + sorted(set(df.method) - set(ORDER))
+    sig = sorted(df.sigma_mm.unique())
+    cell = per_cell(df).set_index(["method", "sigma_mm"])
+    seeds = df.groupby("method").seed.nunique()
+    out = ["| method | seeds | " + " | ".join(f"σ={s:g} mm" for s in sig) + " |",
+           "|---|---|" + "---|" * len(sig)]
+    for m in methods:
+        cells = []
+        for s in sig:
+            r = cell.loc[(m, s)]
+            cells.append(f"{r.rate:.2f} [{r.lo:.2f}–{r.hi:.2f}]")
+        out.append(f"| {m} | {seeds[m]} | " + " | ".join(cells) + " |")
+    agg = aggregate(df, reps=reps).set_index("method")
+    out += ["", "| method | IQM success (seeds × σ) | 95% CI |", "|---|---|---|"]
+    for m in methods:
+        out.append(f"| {m} | {agg.loc[m, 'iqm']:.3f} | {agg.loc[m, 'lo']:.3f}–{agg.loc[m, 'hi']:.3f} |")
+    if ref in methods:
+        out += ["", f"| comparison | P(improvement) | 95% CI |", "|---|---|---|"]
+        for m in methods:
+            if m != ref:
+                pt, lo, hi = prob_improvement(df, ref, m, reps=reps)
+                out.append(f"| P({ref} > {m}) | {pt:.3f} | {lo:.3f}–{hi:.3f} |")
+    return "\n".join(out) + "\n"
+
+
 if __name__ == "__main__":
     df = pd.concat([pd.read_csv(p) for p in sys.argv[1:]])
     print(per_cell(df).to_string(index=False))
