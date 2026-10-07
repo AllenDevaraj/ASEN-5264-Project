@@ -1708,3 +1708,22 @@ Last 1000 episodes:
 It never recovered from the commit-avoidance collapse logged at 01:10. As ruled there, it stays in the matrix unchanged and is reported as a learning failure under the shared 1M-step budget.
 
 oracle_s1 started at 02:42.
+
+## v2 — oracle_s1 finished (2026-10-08 05:07)
+
+1M steps in 2 h 25 min. Last 1000 training episodes:
+- 61.2% success
+- 1.14 attempts
+- 14.2 decisions per episode
+
+Seed 0 reached 87.5% on the same task.
+
+Seed 1's curve:
+
+| steps | 0.2M | 0.4M | 0.6M | 0.8M | 1.0M |
+|---|---|---|---|---|---|
+| success | 40% | 50% | 57% | 58% | 61% |
+
+It was slower and still creeping up at the end. This is ordinary PPO seed variance, and the reason the protocol uses three seeds and IQM over seeds × σ instead of one run. The final comparison uses the deterministic 200-episode eval, not these stochastic training rates.
+
+plain_s1 started at 05:07.
