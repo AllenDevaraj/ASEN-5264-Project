@@ -14,7 +14,7 @@ An SO-ARM101 arm in MuJoCo has to pick a red LEGO brick and place it on a goal w
 | | v1 (course project) | v2 |
 |---|---|---|
 | Grasp | 15 mm XY proximity check; brick slides along the table | Physical top-down grasp: jaw box pads squeeze the brick, it lifts by friction |
-| Robot | Joint angles teleported each step | Position-actuated joints with gravity compensation, 2 ms physics |
+| Robot | Joint angles teleported each step | Position-actuated joints with gravity compensation, 4 ms physics |
 | Camera | Aimed at the true target (privileged) | Real wrist-camera pose; frustum + occlusion decide visibility |
 | Reward | Differed by method (belief-only σ bonus, reward on noisy obs) | Identical for every method, from the true state, potential-based shaping |
 | Belief | Fixed likelihood width (collapsed at 2× training noise) | Particle filter jointly estimates the brick pose and the camera noise level |
@@ -25,7 +25,7 @@ An SO-ARM101 arm in MuJoCo has to pick a red LEGO brick and place it on a goal w
 
 - **Control:** 10 Hz. The policy moves the jaw-centre point P (±15 mm per step) and the gripper yaw, and decides when to commit.
 - **Commit:** runs a physical grasp (open, descend, close, lift 5 cm). If the brick is held, a scripted physical place carries it to the known goal.
-- **Grasp tolerance** (measured): roughly ±7 mm across the jaw axis, so localization matters. Misses physically shove the brick.
+- **Grasp tolerance** (measured): roughly ±6 mm across the jaw axis, so localization matters. Misses physically shove the brick.
 - **Wrist camera noise:** σ(d) = σ_ep · d / 10 cm, clipped to [0.3, 3]·σ_ep. Being closer means clearer readings.
   - Training: σ_ep log-uniform over 2–20 mm.
   - Evaluation: 2, 5, 10, 15, 20 and 30 mm (30 is out of distribution).
@@ -35,7 +35,7 @@ An SO-ARM101 arm in MuJoCo has to pick a red LEGO brick and place it on a goal w
 
 ```bash
 bash setup_venv.sh          # isolated .venv (pinned: mujoco 3.6, SB3 2.7.1, sb3-contrib, rliable, torch CPU)
-./vpy -m pytest -q          # 54 tests; ./vpy runs the venv python without the ROS PYTHONPATH
+./vpy -m pytest -q          # 80 tests; ./vpy runs the venv python without the ROS PYTHONPATH
 ```
 
 Train one method and seed. Checkpoints are written every 100k steps and runs resume automatically:
@@ -84,8 +84,13 @@ vla_SO-ARM101/        v1 legacy: ROS 2 Humble + MoveIt 2 control stack and GUI (
 
 ## Status
 
-- **Done:** v2 env, agents and evaluation harness.
-- **Running:** phase-1 training (oracle sanity gate, then the plain-PPO memory-gap check).
-- **Pending:** results, POMCP v2, and sim footage.
+- **Done:**
+  - v2 env, agents and evaluation harness
+  - POMCP v2: a physics simulator and a learned world model
+  - footage pipeline (`pomdp_pick/footage`, `tools/footage.py`)
+- **Running:**
+  - the RL matrix (5 methods × 3 seeds), then a 200-episode evaluation
+  - the POMCP budget study
+- **Write-up:** [`docs/report.md`](docs/report.md). Results sections are filled in as runs finish.
 
 Progress and every design decision are logged in [`docs/training-log.md`](docs/training-log.md). The design is in [`docs/superpowers/specs/2026-10-07-revamp-design.md`](docs/superpowers/specs/2026-10-07-revamp-design.md).
