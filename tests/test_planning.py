@@ -67,3 +67,65 @@ def test_pomcp_eval_resumes_from_partial_csv(tmp_path):
                        **{"return": 123.0})]).to_csv(str(out) + ".partial", index=False)
     df = evaluate_pomcp(4, sigma_mm=10, n_episodes=1, out_csv=out, max_decisions=6)
     assert df["return"][0] == 123.0 and out.exists() and not (tmp_path / "p.csv.partial").exists()
+
+
+def test_world_model_learns_identity_like_map_and_reports_auc():
+    from pomdp_pick.planning.world_model import WorldModel
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(2000, 18)).astype(np.float32)
+    Y = np.concatenate([0.1 * X[:, :13], (X[:, :1] > 0).astype(np.float32)], 1)
+    rep = WorldModel(hidden=64).fit(X, Y, epochs=30)
+    assert np.mean(rep["val_mse_per_dim"]) < 0.01 and rep["grasp_auc"] > 0.95
+
+
+def test_state_of_picks_the_13_summary_dims_from_a_belief_obs():
+    from pomdp_pick.planning.world_model import STATE_DIM, state_of
+    env = PickPlaceEnv("belief"); obs, _ = env.reset(seed=2)
+    s = state_of(obs)
+    assert s.shape == (STATE_DIM,) == (13,)
+    assert np.allclose(s[5:7], obs[8:10]) and np.isclose(s[12], obs[15])
+
+
+def _tiny_model():
+    from pomdp_pick.planning.world_model import WorldModel
+    rng = np.random.default_rng(1)
+    X = rng.normal(size=(400, 18)).astype(np.float32)
+    Y = np.concatenate([5.0 * X[:, :13], (X[:, :1] > 0).astype(np.float32)], 1)
+    wm = WorldModel(hidden=16)
+    wm.fit(X, Y, epochs=2)
+    return wm
+
+
+def test_world_model_step_keeps_sigmas_nonnegative_and_prob_in_unit_interval():
+    wm = _tiny_model()
+    s = np.full(13, -50.0, np.float32)
+    for a in range(9):
+        s2, p = wm.step_state(s, sb.macro_action(a))
+        assert np.all(s2[9:13] >= 0) and 0.0 <= p <= 1.0
+
+
+def test_wm_planner_returns_legal_action_and_leaves_env_untouched(tmp_path):
+    from pomdp_pick.planning.pomcp import WMPlanner
+    from pomdp_pick.planning.world_model import WorldModel
+    wm = _tiny_model()
+    wm.save(tmp_path / "wm.pt")
+    wm2 = WorldModel.load(tmp_path / "wm.pt")
+    env = PickPlaceEnv("belief"); env.reset(seed=4)
+    snap = sb.snapshot(env)
+    a, stats = WMPlanner(wm2, n_sims=16, rng=np.random.default_rng(0)).plan(env)
+    assert 0 <= a < 9 and stats["n_sims"] == 16
+    assert np.array_equal(snap["d"].qpos, env.d.qpos) and np.array_equal(snap["pf"][0], env.pf.particles)
+
+
+def test_collect_logs_state_action_deltas_and_grasp_labels(tmp_path):
+    from pomdp_pick.planning.collect import collect
+
+    class Commit:   # always commits: every transition is a grasp attempt
+        def reset(self): pass
+        def act(self, obs): return np.array([0, 0, 0, 0, 1.0], np.float32)
+
+    out = collect(None, 6, tmp_path / "d.npz", policy=Commit(), eps=0.0, seed=7)
+    f = np.load(out)
+    X, Y = f["X"], f["Y"]
+    assert X.shape == (6, 18) and Y.shape == (6, 14)
+    assert np.all(X[:, -1] > 0.5) and set(np.unique(Y[:, -1])) <= {0.0, 1.0}
