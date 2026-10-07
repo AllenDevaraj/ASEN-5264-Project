@@ -1471,3 +1471,5 @@ Zero wrong grasps at all noise levels for both policies — distractor avoidance
 - Even with 2 workers, turbo boost took the package from 59 °C to 89–92 °C within 5 s of each resume. The instant-reading rule therefore paused about 50% of the time while guarding against spikes the CPU firmware already manages (TjMax 100 °C).
 - New rule: pause when the **30 s average** exceeds 85 °C, or the instantaneous reading is ≥ 95 °C (hard cap); resume below 75 °C average. Memory and battery rules are unchanged.
 - Test: `test_thermal_filter_ignores_turbo_spikes_but_not_sustained_heat`. The queue was restarted cleanly via the new signal trap.
+
+**Worker count change (13:31):** with 2 workers the package averaged ~86 °C (raw 90–93 °C), giving about 60% duty under the watchdog (~220 steps/s effective). Switched to `n_envs: 1` (1 env process + learner); the benchmark gave ~300 steps/s single-process, at a lower temperature.
