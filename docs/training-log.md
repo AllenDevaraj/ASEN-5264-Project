@@ -1450,3 +1450,19 @@ Zero wrong grasps at all noise levels for both policies — distractor avoidance
 **Observability:** the target is visible in 60% of steps under a random policy (the rest occluded by distractors or out of frustum).
 
 **Run-length ruling:** phase-1 runs (oracle, plain) are 2M steps each, about 1.6–2 h at ~350 steps/s plus PPO update overhead. Length gets extended later if learning curves are still rising.
+
+## Phase-1 launch (oracle s0, plain s0)
+
+**Date:** 2026-10-07 13:26
+
+**First attempt (4 workers):**
+- The CPU package hit 90–92 °C within seconds, so the watchdog cycled pause/resume every 5 s.
+- MemAvailable fell to ~2.7 GB.
+- Stopped it.
+
+**Watchdog bug found:** killing the watchdog left its paused job frozen (SIGSTOP orphan). Fixed: the watchdog now traps SIGTERM/SIGINT/SIGHUP, resumes the job and terminates it (test `test_terminating_watchdog_terminates_paused_child`).
+
+**Relaunch:**
+- `n_envs` 4 → 2. The benchmark showed 4 workers ≈ 1.2× one worker, so the extra cores only produced heat.
+- Queue: oracle_s0 → plain_s0 → eval (100 episodes per σ level).
+- 2M steps per run.

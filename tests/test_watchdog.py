@@ -22,3 +22,25 @@ def test_child_runs_to_completion(tmp_path):
     rc = wd.run(["python3", "-c", "print('ok')"], log_path=tmp_path / "w.log", poll_s=0.2)
     assert rc == 0
     assert "exit 0" in (tmp_path / "w.log").read_text()
+
+def test_terminating_watchdog_terminates_paused_child(tmp_path):
+    import os, signal, subprocess, sys, time
+    marker = tmp_path / "child.pid"
+    child = f"import os,time; open(r'{marker}','w').write(str(os.getpid())); time.sleep(60)"
+    w = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).parents[1] / "tools/watchdog.py"),
+                          "--log", str(tmp_path / "w.log"), "--", sys.executable, "-c", child])
+    for _ in range(50):
+        if marker.exists() and marker.read_text():
+            break
+        time.sleep(0.1)
+    cpid = int(marker.read_text())
+    os.kill(cpid, signal.SIGSTOP)          # simulate a paused job
+    w.terminate()
+    w.wait(timeout=20)
+    time.sleep(0.5)
+    try:
+        os.kill(cpid, 0)
+        alive = open(f"/proc/{cpid}/stat").read().split()[2] != "Z"
+    except (ProcessLookupError, FileNotFoundError):
+        alive = False
+    assert not alive

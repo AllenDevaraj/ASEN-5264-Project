@@ -68,8 +68,22 @@ def run(cmd, log_path, poll_s=5.0):
     log.write(f"{stamp()} start {' '.join(cmd)}\n")
     proc = subprocess.Popen(cmd, start_new_session=True, preexec_fn=lambda: os.nice(19))
     paused = False
+    stop = []
+
+    def _on_signal(signum, _frame):
+        stop.append(signum)
+
+    # If the watchdog is told to stop, never leave its (possibly paused) job frozen behind.
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, _on_signal)
     try:
         while proc.poll() is None:
+            if stop:
+                log.write(f"{stamp()} watchdog got signal {stop[0]}: resuming and terminating job\n")
+                os.killpg(proc.pid, signal.SIGCONT)
+                os.killpg(proc.pid, signal.SIGTERM)
+                paused = False
+                break
             t, m, ac = read_temp_c(), read_mem_avail_mb(), read_on_ac()
             if m is not None and m < MEM_KILL_MB:
                 log.write(f"{stamp()} memory critical ({m:.0f} MB): terminating\n")
@@ -84,7 +98,10 @@ def run(cmd, log_path, poll_s=5.0):
                 os.killpg(proc.pid, signal.SIGCONT)
                 paused = False
                 log.write(f"{stamp()} RESUME temp={t} mem={m} ac={ac}\n")
-            time.sleep(poll_s)
+            for _ in range(max(1, int(poll_s / 0.1))):
+                if stop or proc.poll() is not None:
+                    break
+                time.sleep(0.1)
     finally:
         if paused and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGCONT)
