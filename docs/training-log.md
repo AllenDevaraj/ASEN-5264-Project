@@ -1402,3 +1402,35 @@ Zero wrong grasps at all noise levels for both policies — distractor avoidance
 5. **success% ≈ grasped% throughout** — placement never fails once block is grasped. All 60% failures are pre-grasp timeouts (localization/approach failure, not manipulation failure).
 
 **Definitive scientific conclusion:** Particle filter belief augmentation provides meaningful advantage in the moderate observation noise regime (σ = 5–20mm), peaking at +24% at σ=10mm. The benefit degrades at both extremes: at very low noise, raw observations are sufficient and PF overhead hurts; at very high noise, PF convergence degrades. This is the theoretically expected behavior of a bootstrap particle filter under distance-dependent sensor noise with occlusion.
+
+---
+
+# v2 revamp (branch `revamp`, from 2026-10-07)
+
+## v2 grasp tolerance (physical grasp primitive)
+
+**Date:** 2026-10-07
+**Setup:**
+- `pomdp_pick` physics model: box jaw pads, position actuators (kp=50), 2 ms timestep.
+- Grasp primitive: open to `JAW_OPEN=0.12` rad (~27 mm gap), descend to TCP z=8.5 mm, close, lift 5 cm.
+- Success = brick > 30 mm up and between the jaws.
+- 3 brick poses per cell.
+
+**Fix found while measuring:**
+- The first jaw opening (0.5 rad, ~50 mm gap) let the moving jaw sweep the brick 30+ mm across the table into the fixed jaw, so the tolerance was one-sided and huge.
+- A narrow opening plus `FIXED_CLEAR=4 mm` makes it roughly symmetric.
+- Also fixed: `holding()` returned a numpy bool.
+
+| offset (mm) | -15 | -12 | -9 | -6 | -3 | +0 | +3 | +6 | +9 | +12 | +15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| across jaw axis | 0/3 | 1/3 | 2/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 0/3 | 0/3 |
+| along brick axis | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+
+| yaw error (deg) | -30 | -20 | -15 | -10 | -5 | +0 | +5 | +10 | +15 | +20 | +30 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| success | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+
+**Reading:**
+- Across-axis placement of P (about ±7 mm) is what localization must deliver.
+- Along-axis (±15 mm) and yaw (±30°) are forgiving, because the closing jaws re-centre and rotate the brick.
+- σ_ep ≥ 5 mm (σ(d) up to 3σ_ep when far) therefore matters; a sweep strategy cannot rely on a 15 mm proximity gate any more.
