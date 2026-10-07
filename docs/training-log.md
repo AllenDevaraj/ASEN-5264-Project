@@ -1544,3 +1544,9 @@ An Opus code reviewer found: ready with fixes. All findings were fixed test-firs
 **Run length:** 1M steps per run (the oracle was at 67% after 300k).
 
 **Phase-1 queue:** oracle_s0 → plain_s0 → eval_gate (100 episodes per σ, oracle + plain) → belief_s0. The memory-gap gate (oracle − plain significant) is checked when eval_gate lands; belief keeps training meanwhile.
+
+## oracle_s0 (v2b env, 4 ms) — done 18:11
+
+- 1M steps in 2 h 42 min (~100 steps/s after thermal pauses).
+- Final training success (last 2,000 episodes): **87%**, with 1.03 grasp attempts per episode.
+- plain_s0 started at 18:11.
