@@ -13,8 +13,9 @@ import subprocess
 import sys
 import time
 
-TEMP_PAUSE_C = 85.0
+TEMP_PAUSE_C = 85.0       # applied to the ~30 s average package temperature
 TEMP_RESUME_C = 75.0
+TEMP_HARD_C = 95.0        # instantaneous cap (TjMax is 100 °C): react immediately above this
 MEM_PAUSE_MB = 2000.0
 MEM_KILL_MB = 700.0
 
@@ -28,6 +29,22 @@ def decide(paused, temp_c, mem_avail_mb, on_ac):
     if not paused:
         return "pause" if (hot or low_mem or battery) else "none"
     return "resume" if (cool and not low_mem and not battery) else "none"
+
+
+class ThermalFilter:
+    """Average recent package temperatures so turbo-boost spikes don't cause pause/resume
+    thrash, while sustained heat (or anything above TEMP_HARD_C) still pauses at once."""
+
+    def __init__(self, window=6):
+        self.window, self.samples = window, []
+
+    def update(self, temp_c):
+        if temp_c is None:
+            return None
+        self.samples = (self.samples + [temp_c])[-self.window:]
+        if temp_c >= TEMP_HARD_C:
+            return temp_c
+        return sum(self.samples) / len(self.samples)
 
 
 def read_temp_c():
@@ -69,6 +86,7 @@ def run(cmd, log_path, poll_s=5.0):
     proc = subprocess.Popen(cmd, start_new_session=True, preexec_fn=lambda: os.nice(19))
     paused = False
     stop = []
+    thermal = ThermalFilter(window=max(1, int(30 / poll_s)))
 
     def _on_signal(signum, _frame):
         stop.append(signum)
@@ -84,7 +102,8 @@ def run(cmd, log_path, poll_s=5.0):
                 os.killpg(proc.pid, signal.SIGTERM)
                 paused = False
                 break
-            t, m, ac = read_temp_c(), read_mem_avail_mb(), read_on_ac()
+            raw = read_temp_c()
+            t, m, ac = thermal.update(raw), read_mem_avail_mb(), read_on_ac()
             if m is not None and m < MEM_KILL_MB:
                 log.write(f"{stamp()} memory critical ({m:.0f} MB): terminating\n")
                 os.killpg(proc.pid, signal.SIGTERM)
@@ -93,11 +112,11 @@ def run(cmd, log_path, poll_s=5.0):
             if action == "pause":
                 os.killpg(proc.pid, signal.SIGSTOP)
                 paused = True
-                log.write(f"{stamp()} PAUSE temp={t} mem={m} ac={ac}\n")
+                log.write(f"{stamp()} PAUSE temp_avg={t:.1f} raw={raw} mem={m:.0f} ac={ac}\n" if t is not None else f"{stamp()} PAUSE mem={m} ac={ac}\n")
             elif action == "resume":
                 os.killpg(proc.pid, signal.SIGCONT)
                 paused = False
-                log.write(f"{stamp()} RESUME temp={t} mem={m} ac={ac}\n")
+                log.write(f"{stamp()} RESUME temp_avg={t} raw={raw} mem={m} ac={ac}\n")
             for _ in range(max(1, int(poll_s / 0.1))):
                 if stop or proc.poll() is not None:
                     break

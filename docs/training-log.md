@@ -1466,3 +1466,8 @@ Zero wrong grasps at all noise levels for both policies — distractor avoidance
 - `n_envs` 4 → 2. The benchmark showed 4 workers ≈ 1.2× one worker, so the extra cores only produced heat.
 - Queue: oracle_s0 → plain_s0 → eval (100 episodes per σ level).
 - 2M steps per run.
+
+**Thermal rule change (13:30):**
+- Even with 2 workers, turbo boost took the package from 59 °C to 89–92 °C within 5 s of each resume. The instant-reading rule therefore paused about 50% of the time while guarding against spikes the CPU firmware already manages (TjMax 100 °C).
+- New rule: pause when the **30 s average** exceeds 85 °C, or the instantaneous reading is ≥ 95 °C (hard cap); resume below 75 °C average. Memory and battery rules are unchanged.
+- Test: `test_thermal_filter_ignores_turbo_spikes_but_not_sustained_heat`. The queue was restarted cleanly via the new signal trap.

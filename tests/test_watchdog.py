@@ -44,3 +44,17 @@ def test_terminating_watchdog_terminates_paused_child(tmp_path):
     except (ProcessLookupError, FileNotFoundError):
         alive = False
     assert not alive
+
+def test_thermal_filter_ignores_turbo_spikes_but_not_sustained_heat():
+    f = wd.ThermalFilter(window=6)
+    for t in [60, 62, 61, 63, 60]:
+        f.update(t)
+    assert f.update(92) < wd.TEMP_PAUSE_C          # brief turbo spike: average stays low
+    g = wd.ThermalFilter(window=6)
+    for t in [88] * 6:
+        eff = g.update(t)
+    assert eff > wd.TEMP_PAUSE_C                   # sustained heat pauses
+    h = wd.ThermalFilter(window=6)
+    h.update(60)
+    assert h.update(97) >= 97                      # above the hard cap: react immediately
+    assert wd.ThermalFilter().update(None) is None
