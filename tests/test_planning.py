@@ -49,3 +49,21 @@ def test_heuristic_commits_when_low_and_aligned_and_moves_toward_target_otherwis
     assert Planner.heuristic(env, (p[0], p[1] - 0.05), yaw) == 3
     env.arm.p = np.array([p[0], p[1], 0.03])
     assert Planner.heuristic(env, (p[0] + 0.001, p[1]), yaw + np.pi) == sb.COMMIT
+
+
+def test_pomcp_eval_smoke(tmp_path):
+    from pomdp_pick.eval.evaluate_pomcp import evaluate_pomcp
+    df = evaluate_pomcp(4, sigma_mm=10, n_episodes=1, out_csv=tmp_path / "p.csv", max_decisions=6)
+    assert len(df) == 1 and df.method[0] == "pomcp4" and df.mean_decision_s[0] > 0
+    assert (tmp_path / "p.csv").exists()
+
+
+def test_pomcp_eval_resumes_from_partial_csv(tmp_path):
+    import pandas as pd
+    from pomdp_pick.eval.evaluate_pomcp import evaluate_pomcp
+    out = tmp_path / "p.csv"
+    pd.DataFrame([dict(method="pomcp4", seed=0, sigma_mm=10, episode=0, n_sims=4, success=True, attempts=1,
+                       sim_time=1.0, commit_err_mm=1.0, belief_std_at_commit=1.0, mean_decision_s=0.5,
+                       **{"return": 123.0})]).to_csv(str(out) + ".partial", index=False)
+    df = evaluate_pomcp(4, sigma_mm=10, n_episodes=1, out_csv=out, max_decisions=6)
+    assert df["return"][0] == 123.0 and out.exists() and not (tmp_path / "p.csv.partial").exists()
