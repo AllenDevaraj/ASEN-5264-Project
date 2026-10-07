@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Run a command under laptop-safety limits.
+
+Pauses the whole process group (SIGSTOP) when the CPU package is hot, memory is low
+or the laptop is on battery; resumes (SIGCONT) when safe again. The child runs at nice 19.
+Usage: python tools/watchdog.py [--log runs/watchdog.log] -- cmd args...
+"""
+import argparse
+import glob
+import os
+import signal
+import subprocess
+import sys
+import time
+
+TEMP_PAUSE_C = 85.0
+TEMP_RESUME_C = 75.0
+MEM_PAUSE_MB = 2000.0
+MEM_KILL_MB = 700.0
+
+
+def decide(paused, temp_c, mem_avail_mb, on_ac):
+    """Pure policy: 'pause' | 'resume' | 'none'. Unknown readings (None) count as safe."""
+    hot = temp_c is not None and temp_c > TEMP_PAUSE_C
+    cool = temp_c is None or temp_c < TEMP_RESUME_C
+    low_mem = mem_avail_mb is not None and mem_avail_mb < MEM_PAUSE_MB
+    battery = on_ac is False
+    if not paused:
+        return "pause" if (hot or low_mem or battery) else "none"
+    return "resume" if (cool and not low_mem and not battery) else "none"
+
+
+def read_temp_c():
+    for zone in glob.glob("/sys/class/thermal/thermal_zone*"):
+        try:
+            if open(f"{zone}/type").read().strip() == "x86_pkg_temp":
+                return int(open(f"{zone}/temp").read()) / 1000.0
+        except OSError:
+            continue
+    return None
+
+
+def read_mem_avail_mb():
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024.0
+    except OSError:
+        pass
+    return None
+
+
+def read_on_ac():
+    for path in glob.glob("/sys/class/power_supply/*/online"):
+        if "AC" in path or "ADP" in path:
+            try:
+                return open(path).read().strip() == "1"
+            except OSError:
+                return None
+    return None
+
+
+def run(cmd, log_path, poll_s=5.0):
+    log_path = str(log_path)
+    os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+    log = open(log_path, "a", buffering=1)
+    stamp = lambda: time.strftime("%Y-%m-%d %H:%M:%S")  # noqa: E731
+    log.write(f"{stamp()} start {' '.join(cmd)}\n")
+    proc = subprocess.Popen(cmd, start_new_session=True, preexec_fn=lambda: os.nice(19))
+    paused = False
+    try:
+        while proc.poll() is None:
+            t, m, ac = read_temp_c(), read_mem_avail_mb(), read_on_ac()
+            if m is not None and m < MEM_KILL_MB:
+                log.write(f"{stamp()} memory critical ({m:.0f} MB): terminating\n")
+                os.killpg(proc.pid, signal.SIGTERM)
+                break
+            action = decide(paused, t, m, ac)
+            if action == "pause":
+                os.killpg(proc.pid, signal.SIGSTOP)
+                paused = True
+                log.write(f"{stamp()} PAUSE temp={t} mem={m} ac={ac}\n")
+            elif action == "resume":
+                os.killpg(proc.pid, signal.SIGCONT)
+                paused = False
+                log.write(f"{stamp()} RESUME temp={t} mem={m} ac={ac}\n")
+            time.sleep(poll_s)
+    finally:
+        if paused and proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGCONT)
+    rc = proc.wait()
+    log.write(f"{stamp()} exit {rc}\n")
+    return rc
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--log", default="runs/watchdog.log")
+    ap.add_argument("cmd", nargs=argparse.REMAINDER)
+    a = ap.parse_args()
+    cmd = a.cmd[1:] if a.cmd and a.cmd[0] == "--" else a.cmd
+    sys.exit(run(cmd, a.log))
+
+
+if __name__ == "__main__":
+    main()
