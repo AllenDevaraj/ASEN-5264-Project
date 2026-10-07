@@ -1613,3 +1613,27 @@ Belief PPO recovers about half of the oracle–plain gap at seed 0, with the tra
 Its curve rose until about 400k steps and then crept up slowly: 42% at 450k, 45% at 700k, 52% at 1M. The per-σ comparison waits for the shared-seed 200-episode eval at the end of phase 2.
 
 Phase 2 started automatically at 21:39 with framestack_s0.
+
+## v2 — footage pipeline + first preview (2026-10-07 22:00)
+
+`pomdp_pick/footage/record.py` logs physics states at 30 fps of sim time: arm moves, grasps and the scripted place. `render.py` draws them with MuJoCo (GLFW) and encodes with ffmpeg x264 (2 threads, nice 19, under the watchdog).
+
+Each frame shows:
+- a follow camera at azimuth 135°;
+- belief particles and the belief mean, or the plain policy's raw reading as a ghost brick;
+- the goal;
+- a wrist-camera inset with a visibility light;
+- a status line: searching / grasp attempt k/3 / grasped / placed.
+
+**Preview** (`tools/footage.py`, seed-0 models, σ = 10 mm, shared eval seeds 10000–10011):
+
+| method | successes |
+|---|---|
+| belief | 7/12 |
+| plain | 3/12 |
+
+The contrast clip `runs/footage/preview/belief_vs_plain_ep1.mp4` (21 s, 1920×540) shows:
+- **Belief PPO:** grasps, carries and places.
+- **Plain PPO:** misses twice next to its stale reading; each miss physically shoves the brick.
+
+Free memory dipped to 2.4 GB while footage and training ran together (the desktop apps hold ~4 GB), so side jobs stay short and rare.
