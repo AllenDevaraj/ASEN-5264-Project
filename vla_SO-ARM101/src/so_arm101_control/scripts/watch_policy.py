@@ -59,9 +59,11 @@ def main():
             else os.path.join(scripts_dir, args.model_dir)
     else:
         name = f"ppo_{args.mode}"
+        # scripts/models holds the final 13D/16D policies that match the current env;
+        # pkg_dir/models holds older 16D/19D policies (pre "removed EE obs").
         for candidate in [
-            os.path.join(pkg_dir, 'models', name),
             os.path.join(scripts_dir, 'models', name),
+            os.path.join(pkg_dir, 'models', name),
         ]:
             if os.path.isfile(os.path.join(candidate, 'best_model.zip')):
                 model_dir = candidate

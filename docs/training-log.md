@@ -1434,3 +1434,19 @@ Zero wrong grasps at all noise levels for both policies — distractor avoidance
 - Across-axis placement of P (about ±7 mm) is what localization must deliver.
 - Along-axis (±15 mm) and yaw (±30°) are forgiving, because the closing jaws re-centre and rotate the brick.
 - σ_ep ≥ 5 mm (σ(d) up to 3σ_ep when far) therefore matters; a sweep strategy cannot rely on a 15 mm proximity gate any more.
+
+## v2 env throughput and observability
+
+**Date:** 2026-10-07
+**Setup:** `tools/bench_env.py`, run under the watchdog, random policy with a 3% commit rate.
+
+**Throughput:**
+- plain: 297 steps/s single-process, 353 steps/s with 4 SubprocVecEnv workers.
+- belief: 274 steps/s single-process, 370 steps/s with 4 workers.
+- 4 workers scale poorly; the 28 W i7-1165G7 is thermally limited.
+
+**Watchdog:** paused once at 91 °C during worker start-up and resumed at 55 °C within 5 s.
+
+**Observability:** the target is visible in 60% of steps under a random policy (the rest occluded by distractors or out of frustum).
+
+**Run-length ruling:** phase-1 runs (oracle, plain) are 2M steps each, about 1.6–2 h at ~350 steps/s plus PPO update overhead. Length gets extended later if learning curves are still rising.
