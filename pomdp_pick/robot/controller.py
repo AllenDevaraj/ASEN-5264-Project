@@ -17,10 +17,10 @@ JAW_OPEN = 0.12          # pre-grasp gap ~27 mm: symmetric ~±7 mm tolerance acr
 JAW_CLOSE = -0.174533
 Z_GRASP = 0.0085
 Z_HOVER = 0.06
-Z_CARRY = 0.08
+Z_CARRY = 0.06            # top-down reach tops out near 0.08-0.09 m
 FIXED_CLEAR = 0.004
 BRICK_HALF_W = 0.008
-WORKSPACE = dict(r=(0.11, 0.27), ang=1.2, z=(0.0085, 0.15))
+WORKSPACE = dict(r=(0.11, 0.27), ang=1.2, z=(0.0085, 0.09))
 FRAME_DT = 1.0 / 30.0
 
 
