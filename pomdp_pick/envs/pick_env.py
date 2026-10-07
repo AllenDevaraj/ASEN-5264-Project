@@ -26,11 +26,12 @@ class PickPlaceEnv(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(self, obs_mode="belief", sigma_range=(0.002, 0.020), sigma_fixed=None, drift=0.0005,
-                 max_time=20.0, max_attempts=3, frame_cb=None):
+                 max_time=20.0, max_attempts=3, frame_cb=None, gamma=GAMMA):
         if obs_mode not in DIMS:
             raise ValueError(f"obs_mode must be one of {list(DIMS)}")
         self.obs_mode, self.sigma_range, self.sigma_fixed = obs_mode, sigma_range, sigma_fixed
         self.drift, self.max_time, self.max_attempts, self.frame_cb = drift, max_time, max_attempts, frame_cb
+        self.gamma = gamma
         self.m, self.d = build_model()
         self.arm = Arm(self.m, self.d)
         self.cam = WristCamera(self.m)
@@ -40,14 +41,21 @@ class PickPlaceEnv(gym.Env):
 
     # ---------------- episode setup ----------------
     def _spawn(self, rng):
-        pts = []
+        """Target, two distractors, goal. Bricks are separated by the sum of their footprint
+        half-diagonals (+3 mm) so no spawn interpenetrates, whatever the yaws."""
+        hd = [float(np.hypot(*self.arm.brick_half_size(n)[:2])) for n in (TARGET, *DISTRACTORS)]
+        pts, radii = [], []
         while len(pts) < 4:
             r, a = rng.uniform(0.13, 0.23), rng.uniform(-1.0, 1.0)
             q = np.array([r * math.cos(a), r * math.sin(a)])
-            need = 0.08 if len(pts) == 3 else 0.05
-            if all(np.linalg.norm(q - p) >= need for p in pts):
+            if len(pts) < 3:
+                ok = all(np.linalg.norm(q - p) >= hd[len(pts)] + rp + 0.003 for p, rp in zip(pts, radii))
+            else:
+                ok = all(np.linalg.norm(q - p) >= max(0.08, hd[0] + rp + 0.01) for p, rp in zip(pts, radii))
+            if ok:
                 pts.append(q)
-        return pts  # target, distractor, distractor, goal
+                radii.append(hd[len(pts) - 1] if len(pts) <= 3 else 0.0)
+        return pts
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -89,35 +97,47 @@ class PickPlaceEnv(gym.Env):
         self.visible = bool(self.cam.visible(self.d, self._target(), self._occluders()))
         z = None
         if self.visible:
-            dist = self.cam.distance(self.d, (tx, ty))
+            dist = self.cam.distance(self.d, (tx, ty))   # true distance drives the sensor noise only
             z = self.cam.reading(self.sense_rng, np.array([tx, ty, wrap_pi(tyaw)]), dist, self.sigma_ep)
             self.last_reading, self.age = z, 0
         else:
             self.age = min(self.age + 1, MAX_AGE)
         if first:
             if z is not None:
-                self.pf.reset_from_reading(z, self.cam.distance(self.d, (tx, ty)))
+                self.pf.reset_from_reading(z, self._reading_distance(z))
             else:
                 self.pf.reset_from_prior((0.0, 0.0), (0.13, 0.23), (-1.0, 1.0))
         else:
             self.pf.predict(extra_xy)
             if z is not None:
-                self.pf.update(z, self.cam.distance(self.d, (tx, ty)))
+                self.pf.update(z, self._reading_distance(z))
+
+    def _reading_distance(self, z):
+        """The filter only knows where it *saw* the brick, so its likelihood width uses that."""
+        return self.cam.distance(self.d, z[:2])
 
     # ---------------- reward pieces ----------------
     def _potential(self):
         x, y, _, _ = self.arm.brick_pose()
         return -min(math.hypot(self.arm.p[0] - x, self.arm.p[1] - y), 0.3) / 0.05
 
+    def _upright(self, name=TARGET, max_tilt_deg=20.0):
+        q = self.arm.fj[name]
+        _, qx, qy, _ = self.d.qpos[q + 3:q + 7]
+        return bool(1.0 - 2.0 * (qx * qx + qy * qy) > math.cos(math.radians(max_tilt_deg)))
+
     def _placement_ok(self):
         x, y, z, _ = self.arm.brick_pose()
-        return bool(z < 0.01 and math.hypot(x - self.goal[0], y - self.goal[1]) < 0.02)
+        resting = z < self.arm.brick_half_size(TARGET)[2] + 0.002
+        return bool(resting and self._upright(TARGET) and math.hypot(x - self.goal[0], y - self.goal[1]) < 0.02)
 
     def _drift_target(self):
-        x, y, z, yaw = self.arm.brick_pose()
+        """Random-walk the resting brick's position; orientation and velocity are left to physics."""
+        _, _, z, _ = self.arm.brick_pose()
         if z < 0.01 and self.drift > 0:
-            dx, dy = self.np_random.normal(0.0, self.drift, 2)
-            self.arm.set_brick(x + dx, y + dy, yaw)
+            q = self.arm.fj[TARGET]
+            self.d.qpos[q:q + 2] += self.np_random.normal(0.0, self.drift, 2)
+            mujoco.mj_forward(self.m, self.d)
 
     # ---------------- step ----------------
     def step(self, action):
@@ -129,7 +149,6 @@ class PickPlaceEnv(gym.Env):
             bx, by, _, _ = self.arm.brick_pose()
             self.commit_err.append(1000 * math.hypot(self.arm.p[0] - bx, self.arm.p[1] - by))
             self.std_at_commit.append(float(np.hypot(*self.pf.summary()["std"][:2]) * 1000))
-            before = np.array([bx, by])
             if self.arm.grasp(self.frame_cb):
                 reward += 5.0
                 self.held = True
@@ -137,22 +156,22 @@ class PickPlaceEnv(gym.Env):
                 reward += 10.0 if self.success else 0.0
             else:
                 reward -= 1.0
-                bx2, by2, _, _ = self.arm.brick_pose()
-                extra_xy = float(np.linalg.norm(np.array([bx2, by2]) - before)) + 0.01
+                extra_xy = 0.01   # a miss may have shoved the brick; the filter is not told by how much
         else:
             p = self.arm.p + a[:3] * 0.015
             self.arm.move(p, self.arm.yaw + a[3] * 0.3, STEP_S, self.frame_cb, substep=0.02)
             self._drift_target()
         dt = self.arm.sim_time - t_before
         reward -= 0.01 * dt / STEP_S
-        phi = self._potential()
-        reward += GAMMA * phi - self.phi
-        self.phi = phi
-        if not self.held:
-            self._sense(extra_xy=extra_xy)
         elapsed = self.arm.sim_time - self.t0
         terminated = self.held or self.attempts >= self.max_attempts
         truncated = (not terminated) and elapsed >= self.max_time
+        # Potential-based shaping with Φ(terminal) = 0 keeps the optimal policy unchanged (Ng et al. 1999).
+        phi = 0.0 if terminated else self._potential()
+        reward += self.gamma * phi - self.phi
+        self.phi = phi
+        if not self.held:
+            self._sense(extra_xy=extra_xy)
         return self._obs(), float(reward), bool(terminated), bool(truncated), self._info()
 
     # ---------------- observation ----------------

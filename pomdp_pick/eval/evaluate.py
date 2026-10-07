@@ -13,6 +13,11 @@ EVAL_SIGMAS_MM = (2, 5, 10, 15, 20, 30)
 SEED_BASE = 10_000
 
 
+def eval_csv_path(runs_root, meta, n_episodes):
+    """One CSV per (method, seed, episode count): a 100-episode file is never mistaken for 200."""
+    return Path(runs_root) / "eval" / f"{meta['method']}_seed{meta['seed']}_n{n_episodes}.csv"
+
+
 def evaluate_run(run_dir, sigmas_mm=EVAL_SIGMAS_MM, n_episodes=200, out_csv=None):
     run_dir = Path(run_dir)
     meta = json.loads((run_dir / "progress.json").read_text())
@@ -50,7 +55,7 @@ def main():
         meta = json.loads(prog.read_text())
         if not meta.get("done") or (a.only and meta["method"] not in a.only):
             continue
-        out = Path(a.runs) / "eval" / f"{meta['method']}_seed{meta['seed']}.csv"
+        out = eval_csv_path(a.runs, meta, a.episodes)
         if out.exists():
             continue
         evaluate_run(prog.parent, n_episodes=a.episodes, out_csv=out)

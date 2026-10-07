@@ -10,7 +10,7 @@ import mujoco
 import numpy as np
 
 from pomdp_pick.robot import mjcf_merge as mm
-from pomdp_pick.robot.kinematics import WRIST_ROLL_OFFSET, X_PAN, forward_kinematics, geometric_ik
+from pomdp_pick.robot.kinematics import JOINT_LIMITS, WRIST_ROLL_OFFSET, X_PAN, forward_kinematics, geometric_ik
 from pomdp_pick.robot.model import ARM, DISTRACTORS, TARGET
 
 JAW_OPEN = 0.12          # pre-grasp gap ~27 mm: symmetric ~±7 mm tolerance across the jaw axis
@@ -22,6 +22,7 @@ FIXED_CLEAR = 0.004
 BRICK_HALF_W = 0.008
 WORKSPACE = dict(r=(0.11, 0.27), ang=1.2, z=(0.0085, 0.09))
 FRAME_DT = 1.0 / 30.0
+FLIP_MIN_Z = 0.05         # a π wrist flip sweeps the open jaws: do it with the tips above the 33 mm distractors
 
 
 def _smooth(s):
@@ -53,12 +54,24 @@ class Arm:
         ang = min(max(ang, -WORKSPACE["ang"]), WORKSPACE["ang"])
         return np.array([r * math.cos(ang), r * math.sin(ang), min(max(p[2], WORKSPACE["z"][0]), WORKSPACE["z"][1])])
 
-    @staticmethod
-    def branch_yaw(p, yaw):
-        """The brick is 180°-symmetric: pick yaw + kπ keeping wrist roll mid-range."""
+    def branch_yaw(self, p, yaw):
+        """The brick is 180°-symmetric, so yaw and yaw + kπ grasp the same way. Pick the branch whose
+        wrist roll stays inside its limits and closest to the current roll (hysteresis), so the open
+        jaws never sweep half a turn in the middle of a move; with no current pose, prefer mid-range."""
         pan = math.atan2(-p[1], p[0] - X_PAN)
-        k = min((-2, -1, 0, 1, 2), key=lambda k: abs(pan + yaw + k * math.pi - WRIST_ROLL_OFFSET))
+        lo, hi = JOINT_LIMITS["wrist_roll"]
+        ref = self.sol["wrist_roll"] if self.sol is not None else 0.0
+        cands = [k for k in range(-3, 4) if lo + 0.05 <= pan + yaw + k * math.pi - WRIST_ROLL_OFFSET <= hi - 0.05]
+        if not cands:
+            cands = list(range(-3, 4))
+        k = min(cands, key=lambda k: abs(pan + yaw + k * math.pi - WRIST_ROLL_OFFSET - ref))
         return yaw + k * math.pi
+
+    def _flips(self, p, gy):
+        if self.sol is None:
+            return False
+        pan = math.atan2(-p[1], p[0] - X_PAN)
+        return abs(pan + gy - WRIST_ROLL_OFFSET - self.sol["wrist_roll"]) > math.pi / 2
 
     def tcp_for(self, p, yaw):
         gy = self.branch_yaw(p, yaw)
@@ -66,13 +79,15 @@ class Arm:
         return np.array([p[0] - off * math.sin(gy), p[1] + off * math.cos(gy), p[2]]), gy
 
     def _solve(self, p, yaw):
+        """IK for P; returns (solution or None, P)."""
+        p = np.asarray(p, float)
         tcp, gy = self.tcp_for(p, yaw)
         sols = geometric_ik(*tcp, grasp_yaw=gy)
         if not sols:
-            return None
+            return None, p
         if self.sol is None:
-            return sols[0]
-        return min(sols, key=lambda s: sum((s[k] - self.sol[k]) ** 2 for k in ARM))
+            return sols[0], p
+        return min(sols, key=lambda s: sum((s[k] - self.sol[k]) ** 2 for k in ARM)), p
 
     # ---------- state ----------
     def _body(self, name):
@@ -105,7 +120,7 @@ class Arm:
 
     def reset_pose(self, p, yaw):
         self.p, self.yaw, self.grip, self.sol = self.clamp_p(p), float(yaw), JAW_OPEN, None
-        sol = self._solve(self.p, self.yaw)
+        sol, _ = self._solve(self.p, self.yaw)
         if sol is None:
             raise ValueError(f"reset pose unreachable: {p}")
         self.sol = sol
@@ -136,21 +151,41 @@ class Arm:
     # ---------- motion ----------
     def move(self, p_target, yaw_target, duration, frame_cb=None, substep=0.02):
         """Smooth cartesian move of P; stops at the last reachable waypoint."""
-        p0, y0 = self.p.copy(), self.yaw
         p1, y1 = self.clamp_p(p_target), float(yaw_target)
         reachable = bool(np.allclose(p1, p_target, atol=1e-9))
         n = max(1, int(round(duration / substep)))
+        # A wrist flip near the bricks would sweep the open jaws through them: raise first, then move.
+        path = [self.p + (p1 - self.p) * _smooth(i / n) for i in range(1, n + 1)]
+        yaws = [self.yaw + (y1 - self.yaw) * _smooth(i / n) for i in range(1, n + 1)]
+        if any(q[2] < FLIP_MIN_Z and self._flips(q, self.branch_yaw(q, y)) for q, y in zip(path, yaws)):
+            self._raise_to(FLIP_MIN_Z, frame_cb, substep)
+            p1 = np.array([p1[0], p1[1], max(p1[2], FLIP_MIN_Z)])
+        p0, y0 = self.p.copy(), self.yaw
         for i in range(1, n + 1):
             s = _smooth(i / n)
             p, yaw = p0 + (p1 - p0) * s, y0 + (y1 - y0) * s
-            sol = self._solve(p, yaw)
+            sol, p_used = self._solve(p, yaw)
             if sol is None:
                 reachable = False
             else:
-                self.p, self.yaw, self.sol = p, yaw, sol
+                self.p, self.yaw, self.sol = p_used, yaw, sol
                 self._apply()
             self.settle(substep, frame_cb)
+        # Yaw is only meaningful mod π; keep it bounded (the branch choice follows the current roll).
+        self.yaw = (self.yaw + math.pi / 2) % math.pi - math.pi / 2
         return reachable
+
+    def _raise_to(self, z, frame_cb, substep):
+        """Vertical lift at the current yaw (no branch change), used before a wrist flip."""
+        p0 = self.p.copy()
+        n = max(1, int(round(0.15 / substep)))
+        for i in range(1, n + 1):
+            p = np.array([p0[0], p0[1], p0[2] + (z - p0[2]) * _smooth(i / n)])
+            sol, _ = self._solve(p, self.yaw)
+            if sol is not None:
+                self.p, self.sol = p, sol
+                self._apply()
+            self.settle(substep, frame_cb)
 
     def set_jaw(self, target, duration, frame_cb=None, substep=0.02):
         g0 = self.grip

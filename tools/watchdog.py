@@ -18,6 +18,7 @@ TEMP_RESUME_C = 75.0
 TEMP_HARD_C = 95.0        # instantaneous cap (TjMax is 100 °C): react immediately above this
 MEM_PAUSE_MB = 2000.0
 MEM_KILL_MB = 700.0
+MEM_STALL_S = 600.0       # paused for low memory this long: the job itself holds the memory, stop it
 
 
 def decide(paused, temp_c, mem_avail_mb, on_ac):
@@ -77,7 +78,7 @@ def read_on_ac():
     return None
 
 
-def run(cmd, log_path, poll_s=5.0):
+def run(cmd, log_path, poll_s=5.0, readers=None, mem_stall_s=MEM_STALL_S):
     log_path = str(log_path)
     os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
     log = open(log_path, "a", buffering=1)
@@ -87,6 +88,8 @@ def run(cmd, log_path, poll_s=5.0):
     paused = False
     stop = []
     thermal = ThermalFilter(window=max(1, int(30 / poll_s)))
+    read_t, read_m, read_ac = readers or (read_temp_c, read_mem_avail_mb, read_on_ac)
+    low_mem_since = None
 
     def _on_signal(signum, _frame):
         stop.append(signum)
@@ -102,8 +105,16 @@ def run(cmd, log_path, poll_s=5.0):
                 os.killpg(proc.pid, signal.SIGTERM)
                 paused = False
                 break
-            raw = read_temp_c()
-            t, m, ac = thermal.update(raw), read_mem_avail_mb(), read_on_ac()
+            raw = read_t()
+            t, m, ac = thermal.update(raw), read_m(), read_ac()
+            low_mem = m is not None and m < MEM_PAUSE_MB
+            low_mem_since = (low_mem_since or time.time()) if (paused and low_mem) else None
+            if low_mem_since is not None and time.time() - low_mem_since > mem_stall_s:
+                log.write(f"{stamp()} memory stalled ({m:.0f} MB for {mem_stall_s:.0f}s): terminating job\n")
+                os.killpg(proc.pid, signal.SIGCONT)
+                os.killpg(proc.pid, signal.SIGTERM)
+                paused = False
+                break
             if m is not None and m < MEM_KILL_MB:
                 log.write(f"{stamp()} memory critical ({m:.0f} MB): terminating\n")
                 os.killpg(proc.pid, signal.SIGTERM)
@@ -126,6 +137,9 @@ def run(cmd, log_path, poll_s=5.0):
             os.killpg(proc.pid, signal.SIGCONT)
     rc = proc.wait()
     log.write(f"{stamp()} exit {rc}\n")
+    if stop:
+        # We were told to stop: propagate it so callers (e.g. the run queue) don't retry the job.
+        raise SystemExit(128 + stop[0])
     return rc
 
 

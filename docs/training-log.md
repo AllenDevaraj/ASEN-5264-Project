@@ -1473,3 +1473,34 @@ Zero wrong grasps at all noise levels for both policies — distractor avoidance
 - Test: `test_thermal_filter_ignores_turbo_spikes_but_not_sustained_heat`. The queue was restarted cleanly via the new signal trap.
 
 **Worker count change (13:31):** with 2 workers the package averaged ~86 °C (raw 90–93 °C), giving about 60% duty under the watchdog (~220 steps/s effective). Switched to `n_envs: 1` (1 env process + learner); the benchmark gave ~300 steps/s single-process, at a lower temperature.
+
+## Review fix pass (whole-branch review, 13:35–14:10)
+
+An Opus code reviewer found: ready with fixes. All findings were fixed test-first (`tests/test_review_fixes.py`, 14 tests); the suite is 54/54.
+
+**Fairness:** the belief filter was told how far a missed grasp really pushed the brick (true displacement + 10 mm) and used the true camera-to-target distance in its likelihood. Fixed: a fixed 10 mm inflation after any miss, and the likelihood distance now comes from the reading.
+
+**Env:**
+- Spawns could interpenetrate. They are now separated by the sum of footprint half-diagonals.
+- Shaping now uses Φ(terminal) = 0.
+- Drift no longer resets the brick upright or zeroes its velocity.
+- Placement now requires a resting, upright brick (tilt < 20°).
+
+**Controller:**
+- Wrist-branch hysteresis, with yaw wrapped mod π.
+- A needed π wrist flip near the bricks first raises P to 5 cm. A first attempt that simply blocked low flips deadlocked the scripted oracle 70 mm from the brick, which is why it was replaced.
+
+**Training:**
+- Episode-seed streams are disjoint across seeds and advance on resume.
+- Resume uses `model.num_timesteps`.
+- Saves are atomic, with progress written last.
+- Monitor CSVs are appended on resume.
+
+**Eval:** CSV names encode the episode count.
+
+**Queue:**
+- A low-memory pause longer than 10 min terminates the job (it resumes from its checkpoint).
+- Failed jobs are retried 3×.
+- Stopping the queue propagates and is not retried.
+
+**Impact:** these change env semantics, so the first oracle run (about 6 min of training) was discarded. Phase 1 restarts from scratch.
