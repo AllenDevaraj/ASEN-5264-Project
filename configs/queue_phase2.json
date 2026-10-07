@@ -1,0 +1,156 @@
+[
+ {
+  "name": "framestack_s0",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "framestack",
+   "--seed",
+   "0"
+  ]
+ },
+ {
+  "name": "recurrent_s0",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "recurrent",
+   "--seed",
+   "0"
+  ]
+ },
+ {
+  "name": "oracle_s1",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "oracle",
+   "--seed",
+   "1"
+  ]
+ },
+ {
+  "name": "plain_s1",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "plain",
+   "--seed",
+   "1"
+  ]
+ },
+ {
+  "name": "belief_s1",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "belief",
+   "--seed",
+   "1"
+  ]
+ },
+ {
+  "name": "framestack_s1",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "framestack",
+   "--seed",
+   "1"
+  ]
+ },
+ {
+  "name": "recurrent_s1",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "recurrent",
+   "--seed",
+   "1"
+  ]
+ },
+ {
+  "name": "oracle_s2",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "oracle",
+   "--seed",
+   "2"
+  ]
+ },
+ {
+  "name": "plain_s2",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "plain",
+   "--seed",
+   "2"
+  ]
+ },
+ {
+  "name": "belief_s2",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "belief",
+   "--seed",
+   "2"
+  ]
+ },
+ {
+  "name": "framestack_s2",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "framestack",
+   "--seed",
+   "2"
+  ]
+ },
+ {
+  "name": "recurrent_s2",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "recurrent",
+   "--seed",
+   "2"
+  ]
+ },
+ {
+  "name": "eval_all_n200",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.eval.evaluate",
+   "--episodes",
+   "200"
+  ]
+ }
+]

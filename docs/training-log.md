@@ -1550,3 +1550,21 @@ An Opus code reviewer found: ready with fixes. All findings were fixed test-firs
 - 1M steps in 2 h 42 min (~100 steps/s after thermal pauses).
 - Final training success (last 2,000 episodes): **87%**, with 1.03 grasp attempts per episode.
 - plain_s0 started at 18:11.
+
+## Memory-gap gate — PASSED (eval 100 episodes per σ, shared seeds)
+
+**Date:** 2026-10-07 19:38
+
+| σ_ep (mm) | 2 | 5 | 10 | 15 | 20 | 30 |
+|---|---|---|---|---|---|---|
+| oracle success | 0.93 | 0.93 | 0.93 | 0.93 | 0.93 | 0.93 |
+| plain success | 0.17 | 0.14 | 0.15 | 0.08 | 0.08 | 0.02 |
+| plain Wilson 95% | .11–.26 | .09–.22 | .09–.23 | .04–.15 | .04–.15 | .01–.07 |
+| plain commit error (mm) | 10.5 | 13.1 | 15.6 | 19.0 | 23.3 | 28.8 |
+
+- The oracle is noise-independent by construction: 6.2 mm commit error, 1.0 attempts, 5.4 s per episode.
+- The gap is significant at every level.
+- plain_s0 trained in 1 h 23 min; training success plateaued around 13%.
+- Even at 2 mm, plain commits with 10 mm error. A memoryless policy trained across 2–20 mm cannot calibrate how much to trust a single reading, which is the gap belief/memory methods should close.
+
+**Decision:** continue to the full matrix. Phase 2 is chained after phase 1: framestack_s0, recurrent_s0, then seeds 1–2 for all five methods, then a 200-episode evaluation of every run.
