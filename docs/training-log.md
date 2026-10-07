@@ -1669,3 +1669,29 @@ Last 1000 training episodes:
 That is barely above plain (13.2%) and far below belief (51.8%). Stacking the last four readings gives the policy the raw material to average out noise, but it still wanders through ~94 decisions per episode, like plain, and doesn't learn to localize first and then commit.
 
 Its curve dipped to about 5% around 200–300k steps, then rose to about 13–17%. recurrent_s0 started at 23:07.
+
+## v2 — recurrent_s0 at 500k: collapsed to "never commit" (2026-10-08 01:10)
+
+**Training curve** (rolling 300 episodes):
+
+| steps | success | attempts per episode | decisions | return |
+|---|---|---|---|---|
+| 0 | 0.3% | 2.99 | 11 | −1.55 |
+| 75k | 0.7% | 0.71 | 162 | +0.23 |
+| 390k | 0% | 0.16 | 192 | +0.76 |
+| 566k | 0% | 0.00 | 200 | +0.58 |
+
+The LSTM learned that a random commit nearly always misses (−1), so it stopped committing, and episodes run to the 20 s limit. Its return is positive with zero grasps.
+
+**Is that a reward exploit?** Measured directly, idling in place returns −0.87 / +0.16 / +1.75 on three eval seeds; the larger values come when the brick starts 65–91 mm away. This is the (1−γ)·|Φ| = 0.2·d per-step term of potential shaping, which exceeds the 0.01 time cost when d > 5 cm.
+
+It is *not* an exploit:
+- Ng-style shaping γΦ(s′) − Φ(s) with Φ(terminal) = 0 shifts every action's value at s by the same −Φ(s), so it cannot make idling better than grasping.
+- SB3 bootstraps time-limit truncations, so the guarantee holds here.
+
+The positive idle return is a shaping artefact in the logged return. Report success rates, never raw training return. The collapse is a learning failure: the LSTM never found the +15 grasp before learning to avoid −1 misses. Oracle, plain, framestack and belief all escaped this early.
+
+**Ruling:**
+- No reward or protocol change mid-matrix. Changing it would invalidate 7.6 h of finished runs on a hunch, and per-method tuning breaks the identical-budget comparison.
+- recurrent_s0 finishes its 1M steps. If it stays below 5%, it is reported as a learning failure within the shared budget, with this diagnosis.
+- If compute remains after the matrix and POMCP, run a separately labelled tuned-LSTM ablation (e.g. 2M steps, lower lr, or a commit-exploration bonus).
