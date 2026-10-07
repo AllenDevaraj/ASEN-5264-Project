@@ -20,7 +20,7 @@ def collect(run_dir, n_steps, out_npz, policy=None, eps=0.3, seed=0):
         policy = load_policy(run_dir)
     rng = np.random.default_rng(seed)
     env = PickPlaceEnv("belief")
-    X, Y, ep = [], [], 0
+    X, Y, E, ep = [], [], [], 0
     obs, _ = env.reset(seed=SEED_BASE + seed * 1_000_000 + ep)
     policy.reset()
     while len(X) < n_steps:
@@ -33,6 +33,7 @@ def collect(run_dir, n_steps, out_npz, policy=None, eps=0.3, seed=0):
         commit = a[4] > 0.5
         X.append(np.concatenate([state_of(obs), sb.MACROS[sb.COMMIT] if commit else a]))
         Y.append(np.concatenate([state_of(obs2) - state_of(obs), [float(commit and env.held and not held_before)]]))
+        E.append(ep)
         obs = obs2
         if term or trunc:
             ep += 1
@@ -40,7 +41,7 @@ def collect(run_dir, n_steps, out_npz, policy=None, eps=0.3, seed=0):
             policy.reset()
     out_npz = Path(out_npz)
     out_npz.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(out_npz, X=np.asarray(X, np.float32), Y=np.asarray(Y, np.float32))
+    np.savez_compressed(out_npz, X=np.asarray(X, np.float32), Y=np.asarray(Y, np.float32), E=np.asarray(E, np.int64))
     return out_npz
 
 
@@ -57,7 +58,7 @@ def main():
         collect(a.run, a.steps, out)
     f = np.load(out)
     wm = WorldModel()
-    rep = wm.fit(f["X"], f["Y"], epochs=a.fit_epochs)
+    rep = wm.fit(f["X"], f["Y"], epochs=a.fit_epochs, groups=f["E"])
     wm.save(out.parent / "wm.npz")
     write_report(rep, out.parent / "report.json")
     print({k: v for k, v in rep.items() if not isinstance(v, list)}, flush=True)

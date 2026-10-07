@@ -142,3 +142,78 @@ def test_success_vs_budget_figure(tmp_path):
     assert all(t.lo <= t.rate) and all(t.rate <= t.hi)
     success_vs_budget(df, tmp_path / "b.png", reference=("belief PPO", 0.45))
     assert (tmp_path / "b.png").stat().st_size > 1000
+
+
+def test_heuristic_rollout_reaches_commit_from_any_offset_on_the_macro_grid():
+    from pomdp_pick.planning.pomcp import _heuristic
+    step = 0.667 * 0.015
+    rng = np.random.default_rng(0)
+    for dx0, dy0 in [(0.025, 0.0)] + [tuple(rng.uniform(-0.06, 0.06, 2)) for _ in range(200)]:
+        dx, dy, a = dx0, dy0, None
+        for _ in range(30):
+            a = _heuristic(dx, dy, 0.03, 0.0)
+            if a == sb.COMMIT:
+                break
+            dx -= step * {0: 1, 1: -1}.get(a, 0)
+            dy -= step * {2: 1, 3: -1}.get(a, 0)
+        assert a == sb.COMMIT, (dx0, dy0)
+        assert max(abs(dx), abs(dy)) <= step / 2 + 1e-9
+
+
+def test_decision_latency_reports_cpu_time_that_excludes_frozen_time(tmp_path, monkeypatch):
+    import time as _t
+    from pomdp_pick.eval.evaluate_pomcp import evaluate_pomcp
+    from pomdp_pick.planning import pomcp
+    real = pomcp.Planner._simulate
+
+    def slow(self, *a):                       # stands in for a SIGSTOP pause: wall time passes, CPU doesn't
+        _t.sleep(0.05)
+        return real(self, *a)
+    monkeypatch.setattr(pomcp.Planner, "_simulate", slow)
+    env = PickPlaceEnv("belief"); env.reset(seed=5)
+    _, st = pomcp.Planner(n_sims=4, rng=np.random.default_rng(0)).plan(env)
+    assert 0 < st["cpu_s"] < st["wall_s"] - 0.15
+    df = evaluate_pomcp(4, sigma_mm=10, n_episodes=1, out_csv=tmp_path / "p.csv", max_decisions=2)
+    assert 0 < df.mean_decision_cpu_s[0] < df.mean_decision_s[0]
+
+
+def test_budget_table_prefers_cpu_latency():
+    import pandas as pd
+    from pomdp_pick.eval.figures import budget_table
+    df = pd.DataFrame([dict(method="pomcp32", n_sims=32, success=True, mean_decision_s=9.0, mean_decision_cpu_s=1.0)])
+    assert budget_table(df).decision_s[0] == 1.0
+
+
+def test_world_model_splits_by_episode_when_groups_given():
+    from pomdp_pick.planning.world_model import WorldModel
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(600, 18)).astype(np.float32)
+    Y = np.concatenate([0.1 * X[:, :13], (X[:, :1] > 0).astype(np.float32)], 1)
+    E = np.repeat(np.arange(60), 10)
+    wm = WorldModel(hidden=16)
+    wm.fit(X, Y, epochs=1, groups=E)
+    tr, va = wm.split_
+    assert set(E[tr]).isdisjoint(E[va]) and len(va) > 0
+
+
+def test_delta_head_ignores_commit_rows():
+    from pomdp_pick.planning.world_model import WorldModel
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(3000, 18)).astype(np.float32)
+    commit = X[:, -1] > 0.5
+    D = 0.1 * X[:, :13]
+    D[commit] = 100.0 * rng.normal(size=(commit.sum(), 13))     # e.g. the carry-to-goal jump
+    Y = np.concatenate([D, (X[:, :1] > 0).astype(np.float32)], 1)
+    rep = WorldModel(hidden=64).fit(X, Y, epochs=30)
+    assert np.mean(rep["val_mse_per_dim"]) < 0.01
+
+
+def test_collect_records_episode_ids(tmp_path):
+    from pomdp_pick.planning.collect import collect
+
+    class Commit:
+        def reset(self): pass
+        def act(self, obs): return np.array([0, 0, 0, 0, 1.0], np.float32)
+
+    f = np.load(collect(None, 7, tmp_path / "d.npz", policy=Commit(), eps=0.0, seed=7))
+    assert f["E"].shape == (7,) and np.all(np.diff(f["E"]) >= 0) and f["E"][-1] >= 1   # 3 commits end an episode

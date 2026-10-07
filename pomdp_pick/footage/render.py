@@ -145,6 +145,19 @@ def _status(rec, i, n_att):
     return f"searching · attempts used {rec['attempts'][i]}/{n_att}", (225, 225, 225)
 
 
+def belief_hidden(lifted, success):
+    """Hide the (frozen) belief while the brick is in the air, and for good after the lift that
+    led to a successful place; a slipped lift resumes the search, so the belief comes back."""
+    hidden = np.asarray(lifted, bool).copy()
+    if success and hidden.any():
+        last = np.nonzero(hidden)[0][-1]
+        start = last
+        while start > 0 and hidden[start - 1]:
+            start -= 1
+        hidden[start:] = True
+    return hidden
+
+
 class FollowCam:
     """Three-quarter view whose look-at point eases toward the gripper, so grasps fill the frame."""
 
@@ -166,7 +179,7 @@ def render_episode(npz, out_mp4, title, subtitle="", w=1280, h=720, inset=True, 
     lifted = rec["qpos"][:, adr + 2] > 0.02
     rec["lifted"] = lifted
     rec["last_lift"] = int(np.nonzero(lifted)[0][-1]) if lifted.any() else len(lifted)
-    ever_lifted = np.maximum.accumulate(lifted)   # belief stops updating once the brick is held
+    hidden = belief_hidden(lifted, bool(rec["success"]))
     cam = FollowCam(st.cam)
     cam.look[:] = [rec["p"][0][0], rec["p"][0][1], 0.02]
     out_mp4 = Path(out_mp4)
@@ -180,7 +193,7 @@ def render_episode(npz, out_mp4, title, subtitle="", w=1280, h=720, inset=True, 
         cam.update(rec["p"][i])
         status, col = _status(rec, i, n_attempts)
         f = dict(qpos=rec["qpos"][i], particles=rec["particles"][i], mu=rec["mu"][i], reading=rec["reading"][i],
-                 visible=bool(rec["visible"][i]), goal=rec["goal"], mode=mode, lifted=bool(ever_lifted[i]),
+                 visible=bool(rec["visible"][i]), goal=rec["goal"], mode=mode, lifted=bool(hidden[i]),
                  title=title, subtitle=subtitle or f"camera noise σ = {1000 * float(rec['sigma_ep']):.0f} mm · "
                  f"t = {rec['t'][i]:4.1f} s", status=status, status_col=col, inset=inset)
         ff.stdin.write(st.frame(f).tobytes())

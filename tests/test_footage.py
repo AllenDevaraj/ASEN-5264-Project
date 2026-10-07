@@ -51,3 +51,16 @@ def test_render_episode_writes_an_mp4_with_one_frame_per_record(tmp_path):
     n = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries",
                         "stream=nb_read_frames", "-of", "csv=p=0", str(out)], capture_output=True, text=True)
     assert int(n.stdout.strip()) == len(rec["t"])
+
+
+def test_episode_cache_name_depends_on_method_run_seed_and_sigma():
+    from pomdp_pick.footage.record import episode_name
+    names = {episode_name(m, s, sig, 3) for m in ("belief", "plain") for s in (0, 1) for sig in (5, 10)}
+    assert len(names) == 8
+
+
+def test_belief_hidden_only_while_lifted_or_after_the_final_successful_lift():
+    from pomdp_pick.footage.render import belief_hidden
+    lifted = np.array([0, 1, 1, 0, 0, 0, 1, 1, 0, 0], bool)    # a slipped lift, then the real one
+    assert belief_hidden(lifted, True).astype(int).tolist() == [0, 1, 1, 0, 0, 0, 1, 1, 1, 1]
+    assert belief_hidden(lifted, False).astype(int).tolist() == [0, 1, 1, 0, 0, 0, 1, 1, 0, 0]

@@ -19,15 +19,16 @@ from pomdp_pick.planning.pomcp import Planner
 
 def run_episode(env, planner, seed, max_decisions):
     env.reset(seed=seed)
-    ret, times, info = 0.0, [], {}
+    ret, times, cpus, info = 0.0, [], [], {}
     for _ in range(max_decisions):
         a, stats = planner.plan(env)
         times.append(stats["wall_s"])
+        cpus.append(stats["cpu_s"])
         _, r, term, trunc, info = env.step(sb.macro_action(a))
         ret += r
         if term or trunc:
             break
-    return ret, times, info
+    return ret, times, cpus, info
 
 
 def evaluate_pomcp(n_sims, sigma_mm=10, n_episodes=50, out_csv=None, max_decisions=400, make_planner=None):
@@ -40,14 +41,14 @@ def evaluate_pomcp(n_sims, sigma_mm=10, n_episodes=50, out_csv=None, max_decisio
         if ep in done:
             continue
         planner = make_planner(np.random.default_rng(SEED_BASE + ep))
-        ret, times, info = run_episode(env, planner, SEED_BASE + ep, max_decisions)
+        ret, times, cpus, info = run_episode(env, planner, SEED_BASE + ep, max_decisions)
         rows.append(dict(method=getattr(planner, "label", f"pomcp{n_sims}"), seed=0, sigma_mm=sigma_mm,
                          episode=ep, n_sims=n_sims, success=info.get("success", False),
                          attempts=info.get("attempts", 0), sim_time=info.get("sim_time", np.nan),
                          commit_err_mm=np.mean(info["commit_err_mm"]) if info.get("commit_err_mm") else np.nan,
                          belief_std_at_commit=(np.mean(info["belief_std_at_commit"])
                                                if info.get("belief_std_at_commit") else np.nan),
-                         mean_decision_s=float(np.mean(times)), **{"return": ret}))
+                         mean_decision_s=float(np.mean(times)), mean_decision_cpu_s=float(np.mean(cpus)), **{"return": ret}))
         if partial:
             partial.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(rows).to_csv(partial, index=False)

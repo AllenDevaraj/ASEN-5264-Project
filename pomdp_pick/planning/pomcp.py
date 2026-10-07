@@ -12,7 +12,8 @@ import numpy as np
 
 from pomdp_pick.planning import sim_bridge as sb
 
-ALIGN_XY, ALIGN_YAW, COMMIT_Z = 0.004, 0.2, 0.035
+STEP_XY = 0.667 * 0.015            # macro x/y move (m)
+ALIGN_XY, ALIGN_YAW, COMMIT_Z = STEP_XY / 2 + 1e-6, 0.2, 0.035   # per-axis: always reachable on the macro grid
 
 
 def _heuristic(dx, dy, pz, dyaw):
@@ -20,7 +21,7 @@ def _heuristic(dx, dy, pz, dyaw):
     dyaw = float(np.angle(np.exp(2j * dyaw))) / 2
     if abs(dyaw) > ALIGN_YAW:
         return 6 if dyaw > 0 else 7
-    if math.hypot(dx, dy) >= ALIGN_XY:
+    if max(abs(dx), abs(dy)) > ALIGN_XY:
         if abs(dx) >= abs(dy):
             return 0 if dx > 0 else 1
         return 2 if dy > 0 else 3
@@ -51,7 +52,7 @@ class Planner:
         return np.array([x, y]), float(th)
 
     def plan(self, env):
-        t0 = time.perf_counter()
+        t0, c0 = time.perf_counter(), time.process_time()
         root, snap = _Node(), sb.snapshot(env)
         for _ in range(self.n_sims):
             sb.restore(env, snap)
@@ -61,7 +62,8 @@ class Planner:
         sb.restore(env, snap)
         q = [root.children[a].q if a in root.children else -np.inf for a in range(len(sb.MACROS))]
         best = max(root.children, key=lambda a: root.children[a].n) if root.children else sb.COMMIT
-        return int(best), {"n_sims": self.n_sims, "wall_s": time.perf_counter() - t0, "q": q}
+        return int(best), {"n_sims": self.n_sims, "wall_s": time.perf_counter() - t0,
+                           "cpu_s": time.process_time() - c0, "q": q}
 
     def _simulate(self, env, node, depth, txy, tyaw):
         if depth >= self.depth:
@@ -123,13 +125,14 @@ class WMPlanner:
 
     def plan(self, env):
         from pomdp_pick.planning.world_model import state_of
-        t0 = time.perf_counter()
+        t0, c0 = time.perf_counter(), time.process_time()
         root, s0 = _Node(), state_of(env._obs())
         for _ in range(self.n_sims):
             self._simulate(s0, root, 0)
         q = [root.children[a].q if a in root.children else -np.inf for a in range(len(sb.MACROS))]
         best = max(root.children, key=lambda a: root.children[a].n) if root.children else sb.COMMIT
-        return int(best), {"n_sims": self.n_sims, "wall_s": time.perf_counter() - t0, "q": q}
+        return int(best), {"n_sims": self.n_sims, "wall_s": time.perf_counter() - t0,
+                           "cpu_s": time.process_time() - c0, "q": q}
 
     def _simulate(self, s, node, depth):
         if depth >= self.depth:

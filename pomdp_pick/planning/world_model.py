@@ -48,17 +48,32 @@ class WorldModel:
     def _commit_mask(X):
         return X[:, -1] > 0.5
 
-    def fit(self, X, Y, epochs=30, val_frac=0.15, seed=0, batch=256, lr=1e-3):
+    def fit(self, X, Y, epochs=30, val_frac=0.15, seed=0, batch=256, lr=1e-3, groups=None):
+        """groups: episode id per row; validation then holds out whole episodes (no neighbour leakage)."""
         import torch
         from torch import nn
         torch.set_num_threads(1)
         torch.manual_seed(seed)
         X, Y = np.asarray(X, np.float32), np.asarray(Y, np.float32)
-        idx = np.random.default_rng(seed).permutation(len(X))
-        n_val = int(len(X) * val_frac)
-        va, tr = idx[:n_val], idx[n_val:]
+        prng = np.random.default_rng(seed)
+        if groups is None:
+            idx = prng.permutation(len(X))
+            n_val = int(len(X) * val_frac)
+            va, tr = idx[:n_val], idx[n_val:]
+        else:
+            groups = np.asarray(groups)
+            ug = prng.permutation(np.unique(groups))
+            val_g = ug[:max(1, int(len(ug) * val_frac))]
+            is_val = np.isin(groups, val_g)
+            va, tr = np.nonzero(is_val)[0], np.nonzero(~is_val)[0]
+            n_val = len(va)
+        self.split_ = (tr, va)
+        # Commit rows train the grasp head only: a commit is terminal for the planner, and its Δ
+        # (e.g. the carry to the goal) would swamp the per-step dynamics.
+        mv = ~self._commit_mask(X)
+        trm = tr[mv[tr]]
         self.x_mu, self.x_sd = X[tr].mean(0), X[tr].std(0) + 1e-6
-        self.y_mu, self.y_sd = Y[tr, :-1].mean(0), Y[tr, :-1].std(0) + 1e-6
+        self.y_mu, self.y_sd = Y[trm, :-1].mean(0), Y[trm, :-1].std(0) + 1e-6
         h = self.hidden
         trunk = nn.Sequential(nn.Linear(X.shape[1], h), nn.ReLU(), nn.Linear(h, h), nn.ReLU(),
                               nn.Linear(h, h), nn.ReLU())
@@ -72,8 +87,8 @@ class WorldModel:
         for _ in range(epochs):
             for b in np.array_split(rng.permutation(tr), max(1, len(tr) // batch)):
                 z = trunk(xt[b])
-                loss = nn.functional.mse_loss(head_d(z), dt[b])
                 m = mt[b]
+                loss = nn.functional.mse_loss(head_d(z)[~m], dt[b][~m]) if (~m).any() else 0.0
                 if m.any():
                     loss = loss + nn.functional.binary_cross_entropy_with_logits(head_g(z)[m, 0], gt[b][m])
                 opt.zero_grad()
@@ -82,12 +97,13 @@ class WorldModel:
         lin = [l for l in trunk if isinstance(l, nn.Linear)] + [head_d, head_g]
         self.params = [(l.weight.detach().numpy().T.copy(), l.bias.detach().numpy().copy()) for l in lin]
         d_pred, p_pred = self.predict(X[va])
-        mse = ((d_pred - Y[va, :-1]) ** 2).mean(0)
-        var = Y[va, :-1].var(0) + 1e-12
         cm = self._commit_mask(X[va])
+        mse = ((d_pred[~cm] - Y[va][~cm, :-1]) ** 2).mean(0)
+        var = Y[va][~cm, :-1].var(0) + 1e-12
         return {"val_mse_per_dim": mse.tolist(), "val_r2_per_dim": (1 - mse / var).tolist(),
                 "grasp_auc": auc(p_pred[cm], Y[va, -1][cm] > 0.5), "n_train": int(len(tr)),
-                "n_val": int(n_val), "n_val_commits": int(cm.sum())}
+                "n_val": int(n_val), "n_val_commits": int(cm.sum()),
+                "split": "episode" if groups is not None else "transition"}
 
     def predict(self, x):
         """x: (18,) or (N, 18) -> (Δstate in obs units, p_grasp in [0, 1])."""

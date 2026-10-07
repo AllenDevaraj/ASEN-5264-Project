@@ -31,11 +31,13 @@ def success_vs_sigma(df, path):
 def budget_table(df):
     """Success (Wilson 95% CI) and mean decision latency per planner and simulation budget."""
     rows = []
+    # CPU time excludes watchdog SIGSTOP pauses, which wall time would count
+    lat = "mean_decision_cpu_s" if "mean_decision_cpu_s" in df else "mean_decision_s"
     for (m, n), g in df.groupby(["method", "n_sims"]):
         k, tot = int(g.success.sum()), len(g)
         lo, hi = wilson(k, tot)
         rows.append(dict(method=m, simulator="learned WM" if m.startswith("wm") else "physics", n_sims=int(n),
-                         rate=k / tot, lo=lo, hi=hi, n=tot, decision_s=float(g.mean_decision_s.mean())))
+                         rate=k / tot, lo=lo, hi=hi, n=tot, decision_s=float(g[lat].mean())))
     return pd.DataFrame(rows).sort_values(["simulator", "n_sims"]).reset_index(drop=True)
 
 
@@ -55,7 +57,7 @@ def success_vs_budget(df, path, reference=None):
         a.legend(frameon=False, fontsize=8)
     a1.set_ylabel("Pick-and-place success (%)")
     a1.set_ylim(0, 100)
-    a2.set_ylabel("Wall time per decision (s)")
+    a2.set_ylabel("CPU time per decision (s)")
     a2.set_yscale("log")
     fig.tight_layout()
     fig.savefig(path)

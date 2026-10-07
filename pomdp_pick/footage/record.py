@@ -55,6 +55,10 @@ def record_episode(env, act, seed, max_decisions=400):
     return out
 
 
+def episode_name(method, run_seed, sigma_mm, i):
+    return f"{method}_s{run_seed}_sig{sigma_mm:g}_ep{i}"
+
+
 def policy_actor(run_dir):
     from pomdp_pick.agents.methods import load_policy
     pol = load_policy(run_dir)
