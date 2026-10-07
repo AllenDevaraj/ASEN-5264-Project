@@ -1656,3 +1656,16 @@ Deferred minors:
 - particle–distractor overlap
 
 Suite: 80/80.
+
+## v2 — framestack_s0 finished (2026-10-07 23:07)
+
+1M steps in 1 h 28 min.
+
+Last 1000 training episodes:
+- 16.6% success
+- 1.54 attempts
+- 93.7 decisions per episode
+
+That is barely above plain (13.2%) and far below belief (51.8%). Stacking the last four readings gives the policy the raw material to average out noise, but it still wanders through ~94 decisions per episode, like plain, and doesn't learn to localize first and then commit.
+
+Its curve dipped to about 5% around 200–300k steps, then rose to about 13–17%. recurrent_s0 started at 23:07.
