@@ -1592,3 +1592,24 @@ Written while belief_s0 trains. Only unit tests and a short timing probe ran; ev
 The 512 budget is estimated at ~13 min per episode, so it goes last in `configs/queue_pomcp.json`, where it can be cut.
 
 **Test fix:** `test_stopping_the_queue_does_not_retry_the_job` failed during training. The real watchdog (93 °C) had paused the test job before it wrote its marker file, which is correct safety behavior. The test now counts job starts in the watchdog log, which is the property itself. Suite: 68/68.
+
+## v2 — belief_s0 finished (2026-10-07 21:39)
+
+1M steps in 2 h 01 min of wall time, including watchdog pauses: about 30 s on / 15 s off at a 30 s average of 85–89 °C. Memory never dropped below 4.5 GB.
+
+Seed-0 training curves, last 1000 episodes:
+
+| method | success | attempts | ep. length (decisions) | wall time |
+|---|---|---|---|---|
+| oracle | 87.5% | 1.03 | 12.5 | 2.7 h |
+| belief | 51.8% | 1.52 | 23.5 | 2.0 h |
+| plain | 13.2% | 1.56 | 95.5 | 1.35 h |
+
+Belief PPO recovers about half of the oracle–plain gap at seed 0, with the training σ mix of 2–20 mm.
+
+- **Plain PPO** wanders: about 95 decisions per episode, of a 200 maximum. Its latest reading goes stale as soon as the target is occluded, or after the arm moves.
+- **Belief PPO** goes in, at about 23 decisions, and commits with an uncertainty estimate.
+
+Its curve rose until about 400k steps and then crept up slowly: 42% at 450k, 45% at 700k, 52% at 1M. The per-σ comparison waits for the shared-seed 200-episode eval at the end of phase 2.
+
+Phase 2 started automatically at 21:39 with framestack_s0.
