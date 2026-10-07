@@ -232,14 +232,18 @@ def test_stopping_the_queue_does_not_retry_the_job(tmp_path):
     q = tmp_path / "q.json"
     q.write_text(json.dumps([{"name": "long", "cmd": [sys.executable, "-c", script]}]))
     proc = subprocess.Popen([sys.executable, str(ROOT / "tools/run_queue.py"), str(q)], cwd=tmp_path)
-    for _ in range(100):
-        if marker.exists():
+    log = tmp_path / "runs" / "watchdog.log"
+    for _ in range(100):   # a hot laptop may thermally pause the job before it writes the marker
+        if marker.exists() or (log.exists() and " start " in log.read_text()):
             break
         time.sleep(0.1)
+    time.sleep(0.5)
     proc.terminate()
     proc.wait(timeout=30)
     time.sleep(1.0)
-    assert marker.read_text() == "x"             # started once, never retried
+    starts = [line for line in log.read_text().splitlines() if " start " in line]
+    assert len(starts) == 1                      # started once, never retried
+    assert not marker.exists() or marker.read_text() == "x"
     assert not (tmp_path / "q.json.done").exists()
 
 
