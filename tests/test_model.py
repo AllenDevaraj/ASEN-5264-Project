@@ -4,7 +4,7 @@ from pomdp_pick.robot.model import build_model, ARM, TARGET
 def test_actuated_with_pads_and_camera():
     m, d = build_model()
     assert m.nu == 6
-    assert abs(m.opt.timestep - 0.002) < 1e-12
+    assert abs(m.opt.timestep - 0.004) < 1e-12
     for g in ("gripper_pad", "jaw_pad"):
         gid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, g)
         assert gid >= 0 and m.geom_contype[gid] == 1

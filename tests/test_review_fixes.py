@@ -241,3 +241,13 @@ def test_stopping_the_queue_does_not_retry_the_job(tmp_path):
     time.sleep(1.0)
     assert marker.read_text() == "x"             # started once, never retried
     assert not (tmp_path / "q.json.done").exists()
+
+
+def test_monitor_csv_has_header_after_fresh_and_resumed_runs(tmp_path):
+    from pomdp_pick.agents.train import train
+    hp = {"n_steps": 64, "batch_size": 64, "n_epochs": 1}
+    run = train("oracle", 0, 64, tmp_path, n_envs=1, ckpt_every=64, hparams=hp)
+    train("oracle", 0, 128, tmp_path, n_envs=1, ckpt_every=64, hparams=hp)
+    lines = (run / "monitor" / "w0.monitor.csv").read_text().splitlines()
+    assert lines[0].startswith("#") and lines[1].startswith("r,l,t")
+    assert sum(1 for line in lines if line.startswith("r,l,t")) == 1

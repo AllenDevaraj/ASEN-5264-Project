@@ -1504,3 +1504,43 @@ An Opus code reviewer found: ready with fixes. All findings were fixed test-firs
 - Stopping the queue propagates and is not retried.
 
 **Impact:** these change env semantics, so the first oracle run (about 6 min of training) was discarded. Phase 1 restarts from scratch.
+
+## Oracle sanity gate — PASSED (v2a env, 2 ms physics)
+
+**Date:** 2026-10-07 13:40–15:25. Archived at `runs/archive/oracle_gate_v2a_dt2ms`.
+
+**Oracle PPO, 300k steps** (each block is about 1,930 episodes):
+
+| block | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| success | 0.02 | 0.12 | 0.28 | 0.38 | 0.43 | 0.51 | 0.55 | 0.61 | 0.61 | 0.67 |
+| grasp attempts | 2.94 | 2.61 | 1.94 | 1.54 | 1.37 | 1.26 | 1.18 | 1.16 | 1.14 | 1.14 |
+
+**Reading:** the physical-grasp task is learnable. The policy learns to approach, align and commit once.
+
+## Speed-up for the main matrix
+
+**Problem:** a trained policy commits about once per 12 decisions, and each commit simulated ~5.5 s of grasp + place. Training ran at ~85 steps/s, ~50 after thermal pauses, so 2M steps took ~11 h.
+
+**Changes** (tests: `test_actuated_with_pads_and_camera`, `test_primitives_fit_a_tight_sim_time_budget`):
+- Physics timestep 2 ms → 4 ms; pad solref 4 → 8 ms (≥ 2× timestep).
+- Grasp primitive ~2.9 s → ~1.75 s; place ~3.2 s → ~2.2 s.
+
+**Result:**
+- Policy-like workload (scripted oracle): **238 steps/s**, 2.8× faster.
+- Grasp tolerance re-measured at 4 ms:
+
+| offset (mm) | -15 | -12 | -9 | -6 | -3 | +0 | +3 | +6 | +9 | +12 | +15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| across jaw axis | 0/3 | 0/3 | 1/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 2/3 | 0/3 | 0/3 |
+| along brick axis | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+
+| yaw error (deg) | -30 | -20 | -15 | -10 | -5 | +0 | +5 | +10 | +15 | +20 | +30 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| success | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+
+**Also fixed:** SB3 Monitor never wrote a CSV header with `override_existing=False`. A new file is now overwritten (header written), and the file is appended on resume.
+
+**Run length:** 1M steps per run (the oracle was at 67% after 300k).
+
+**Phase-1 queue:** oracle_s0 → plain_s0 → eval_gate (100 episodes per σ, oracle + plain) → belief_s0. The memory-gap gate (oracle − plain significant) is checked when eval_gate lands; belief keeps training meanwhile.

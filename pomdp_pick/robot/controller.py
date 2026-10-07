@@ -200,29 +200,29 @@ class Arm:
         return bool(z > 0.03 and math.hypot(x - self.p[0], y - self.p[1]) < 0.025)
 
     def grasp(self, frame_cb=None):
-        """Open, descend, close, lift 5 cm. Returns True if the brick is held (physics)."""
+        """Open, descend, close, lift 5 cm (~1.75 s). Returns True if the brick is held (physics)."""
         hover = self.p.copy()
-        self.set_jaw(JAW_OPEN, 0.2, frame_cb)
-        self.move(np.array([*self.p[:2], Z_GRASP]), self.yaw, 0.8, frame_cb)
+        self.set_jaw(JAW_OPEN, 0.1, frame_cb)
+        self.move(np.array([*self.p[:2], Z_GRASP]), self.yaw, 0.5, frame_cb)
+        self.settle(0.1, frame_cb)
+        self.set_jaw(JAW_CLOSE, 0.3, frame_cb)
         self.settle(0.15, frame_cb)
-        self.set_jaw(JAW_CLOSE, 0.5, frame_cb)
-        self.settle(0.25, frame_cb)
-        self.move(np.array([*self.p[:2], Z_GRASP + 0.05]), self.yaw, 0.8, frame_cb)
-        self.settle(0.2, frame_cb)
+        self.move(np.array([*self.p[:2], Z_GRASP + 0.05]), self.yaw, 0.5, frame_cb)
+        self.settle(0.1, frame_cb)
         held = self.holding()
         if not held:
-            self.set_jaw(JAW_OPEN, 0.25, frame_cb)
-            self.move(np.array([*self.p[:2], max(hover[2], Z_HOVER)]), self.yaw, 0.5, frame_cb)
+            self.set_jaw(JAW_OPEN, 0.2, frame_cb)
+            self.move(np.array([*self.p[:2], max(hover[2], Z_HOVER)]), self.yaw, 0.4, frame_cb)
         return held
 
     def place(self, goal_xy, frame_cb=None):
-        """Carry to goal, lower, release, retreat. True if the brick rests within 20 mm of the goal."""
-        self.move(np.array([*self.p[:2], Z_CARRY]), self.yaw, 0.4, frame_cb)
+        """Carry to goal, lower, release, retreat (~2.2 s). True if the brick rests within 20 mm of the goal."""
+        self.move(np.array([*self.p[:2], Z_CARRY]), self.yaw, 0.3, frame_cb)
         dist = float(np.linalg.norm(np.asarray(goal_xy) - self.p[:2]))
-        self.move(np.array([*goal_xy, Z_CARRY]), self.yaw, max(0.6, dist / 0.2), frame_cb)
-        self.move(np.array([*goal_xy, Z_GRASP + 0.004]), self.yaw, 0.7, frame_cb)
-        self.set_jaw(JAW_OPEN, 0.3, frame_cb)
-        self.move(np.array([*goal_xy, Z_HOVER]), self.yaw, 0.5, frame_cb)
-        self.settle(0.3, frame_cb)
+        self.move(np.array([*goal_xy, Z_CARRY]), self.yaw, max(0.4, dist / 0.3), frame_cb)
+        self.move(np.array([*goal_xy, Z_GRASP + 0.004]), self.yaw, 0.45, frame_cb)
+        self.set_jaw(JAW_OPEN, 0.2, frame_cb)
+        self.move(np.array([*goal_xy, Z_HOVER]), self.yaw, 0.35, frame_cb)
+        self.settle(0.2, frame_cb)
         x, y, z, _ = self.brick_pose()
         return bool(z < 0.01 and math.hypot(x - goal_xy[0], y - goal_xy[1]) < 0.02)

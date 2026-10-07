@@ -1,5 +1,6 @@
 [
   {"name": "oracle_s0", "cmd": ["./vpy", "-m", "pomdp_pick.agents.train", "--method", "oracle", "--seed", "0"]},
   {"name": "plain_s0",  "cmd": ["./vpy", "-m", "pomdp_pick.agents.train", "--method", "plain",  "--seed", "0"]},
-  {"name": "eval_phase1", "cmd": ["./vpy", "-m", "pomdp_pick.eval.evaluate", "--episodes", "100", "--only", "oracle", "plain"]}
+  {"name": "eval_gate", "cmd": ["./vpy", "-m", "pomdp_pick.eval.evaluate", "--episodes", "100", "--only", "oracle", "plain"]},
+  {"name": "belief_s0", "cmd": ["./vpy", "-m", "pomdp_pick.agents.train", "--method", "belief", "--seed", "0"]}
 ]

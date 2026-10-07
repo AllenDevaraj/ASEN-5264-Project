@@ -1,7 +1,8 @@
 """Build the v2 MuJoCo model: SO-ARM101 with physical jaw pads, position actuators and a wrist camera site.
 
 Settings verified by a grasp prototype (24/24 lifts): jaw meshes become visual-only and box pads
-carry the contact; arm position actuators kp=50 kv=4.5 with gravity compensation; 2 ms timestep.
+carry the contact; arm position actuators kp=50 kv=4.5 with gravity compensation; 4 ms timestep
+(grasps verified at 2 and 4 ms; 4 ms halves the physics cost per decision).
 """
 import os
 import xml.etree.ElementTree as ET
@@ -27,7 +28,7 @@ _EXCLUDES = [("world", "shoulder"), ("world", "upper_arm"), ("shoulder", "lower_
 
 @dataclass(frozen=True)
 class ModelConfig:
-    timestep: float = 0.002
+    timestep: float = 0.004
     arm_kp: float = 50.0
     arm_kv: float = 4.5
     arm_force: float = 3.5
@@ -114,7 +115,7 @@ def build_model(cfg=ModelConfig()):
             pos, quat, half = pads[name]
             ET.SubElement(body, "geom", name=f"{name}_pad", type="box", pos=fmt(pos), quat=fmt(quat),
                           size=fmt(half), contype="1", conaffinity="1", condim=str(cfg.condim),
-                          friction=fmt(cfg.friction), solref="0.004 1", solimp="0.95 0.99 0.001",
+                          friction=fmt(cfg.friction), solref="0.008 1", solimp="0.95 0.99 0.001",
                           rgba="0.2 0.9 0.4 0", mass="0")
         if name == "gripper":
             ET.SubElement(body, "site", name="wrist_cam", pos=fmt(cam_pos), quat=fmt(cam_quat), size="0.003")

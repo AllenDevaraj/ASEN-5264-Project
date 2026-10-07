@@ -25,8 +25,10 @@ def _env_fn(obs_mode, rank, monitor_dir, gamma):
         from stable_baselines3.common.monitor import Monitor
         from pomdp_pick.envs.pick_env import PickPlaceEnv
         env = PickPlaceEnv(obs_mode, gamma=gamma)
-        return Monitor(env, os.path.join(monitor_dir, f"w{rank}"), info_keywords=("success", "attempts"),
-                       override_existing=False)
+        path = os.path.join(monitor_dir, f"w{rank}")
+        # SB3 writes the CSV header only when overwriting: overwrite a new file, append on resume.
+        fresh = not os.path.exists(path + ".monitor.csv")
+        return Monitor(env, path, info_keywords=("success", "attempts"), override_existing=fresh)
     return f
 
 

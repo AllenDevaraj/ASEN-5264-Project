@@ -1,4 +1,4 @@
-total_steps: 2000000
+total_steps: 1000000
 n_envs: 1
 ckpt_every: 100000
 hparams:

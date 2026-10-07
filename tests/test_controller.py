@@ -39,3 +39,15 @@ def test_unreachable_target_holds_pose():
     assert ok is False
     assert np.all(np.isfinite(arm.p)) and np.linalg.norm(arm.p[:2]) <= 0.27
     assert np.linalg.norm(arm.p - before) < 0.15
+
+
+def test_primitives_fit_a_tight_sim_time_budget():
+    """Each commit costs sim time = training wall time; keep the grasp+place chain short."""
+    arm = _setup()
+    t0 = arm.sim_time
+    assert arm.grasp()
+    t1 = arm.sim_time
+    assert arm.place(np.array([0.16, -0.08]))
+    t2 = arm.sim_time
+    assert t1 - t0 <= 1.8
+    assert t2 - t1 <= 2.6
