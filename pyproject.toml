@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pomdp_pick"
+version = "2.0.0"
+description = "SO-ARM101 pick-and-place under observation uncertainty: physics grasping, belief RL baselines, POMCP"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["pomdp_pick*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
