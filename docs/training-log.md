@@ -1568,3 +1568,27 @@ An Opus code reviewer found: ready with fixes. All findings were fixed test-firs
 - Even at 2 mm, plain commits with 10 mm error. A memoryless policy trained across 2–20 mm cannot calibrate how much to trust a single reading, which is the gap belief/memory methods should close.
 
 **Decision:** continue to the full matrix. Phase 2 is chained after phase 1: framestack_s0, recurrent_s0, then seeds 1–2 for all five methods, then a 200-episode evaluation of every run.
+
+## v2 — POMCP v2 code (plan 2, 2026-10-07 ~21:30)
+
+Written while belief_s0 trains. Only unit tests and a short timing probe ran; every study run waits for the RL matrix.
+
+- **`planning/sim_bridge.py`:** exact snapshot/restore (`mj_copyData` + arm/env fields + all three RNG states + particle filter). A round-trip replays bit-identically. 9 macro actions.
+- **`planning/pomcp.py`:**
+  - `Planner`: PO-UCT with root sampling. Each simulation writes a belief particle as the true target pose, then steps the real env, so simulated grasps are physical.
+  - `WMPlanner`: the same search over a learned model in the 13-D belief-summary space.
+- **`planning/world_model.py`:**
+  - 3×128 MLP with two heads: Δsummary (MSE) and grasp logit (BCE, trained and scored only on commit transitions).
+  - Reports held-out MSE/R² per dimension and grasp AUC (rank formula).
+  - numpy forward pass, so no torch at planning time.
+- **`planning/collect.py`:** belief-PPO rollouts with 30% random macro actions, so all nine macros are covered. Seeds are disjoint from training and eval.
+- **`eval/evaluate_pomcp.py`:** same eval seeds (10 000 + i) and σ = 10 mm. Each finished episode is checkpointed to `.partial`, so a retried job resumes.
+
+**Timing probe** (32 sims, σ = 10 mm, with belief_s0 training on the same CPU):
+- 0.6–1.0 s per decision (~20 ms per physical simulation)
+- 25–48 decisions per episode
+- 1 of 2 episodes succeeded; in the other, the grasp held but the scripted place failed
+
+The 512 budget is estimated at ~13 min per episode, so it goes last in `configs/queue_pomcp.json`, where it can be cut.
+
+**Test fix:** `test_stopping_the_queue_does_not_retry_the_job` failed during training. The real watchdog (93 °C) had paused the test job before it wrote its marker file, which is correct safety behavior. The test now counts job starts in the watchdog log, which is the property itself. Suite: 68/68.
