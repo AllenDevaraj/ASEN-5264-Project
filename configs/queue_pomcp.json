@@ -1,0 +1,55 @@
+[
+ {
+  "name": "wm_collect_fit",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.planning.collect",
+   "--run",
+   "runs/belief/seed0",
+   "--steps",
+   "200000"
+  ]
+ },
+ {
+  "name": "pomcp_32_128",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.eval.evaluate_pomcp",
+   "--sims",
+   "32",
+   "128",
+   "--episodes",
+   "50"
+  ]
+ },
+ {
+  "name": "wmpomcp_all",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.eval.evaluate_pomcp",
+   "--wm",
+   "runs/world_model/wm.npz",
+   "--sims",
+   "32",
+   "128",
+   "512",
+   "--episodes",
+   "50"
+  ]
+ },
+ {
+  "name": "pomcp_512",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.eval.evaluate_pomcp",
+   "--sims",
+   "512",
+   "--episodes",
+   "50"
+  ]
+ }
+]

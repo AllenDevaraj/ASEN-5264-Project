@@ -129,3 +129,16 @@ def test_collect_logs_state_action_deltas_and_grasp_labels(tmp_path):
     X, Y = f["X"], f["Y"]
     assert X.shape == (6, 18) and Y.shape == (6, 14)
     assert np.all(X[:, -1] > 0.5) and set(np.unique(Y[:, -1])) <= {0.0, 1.0}
+
+
+def test_success_vs_budget_figure(tmp_path):
+    import pandas as pd
+    from pomdp_pick.eval.figures import budget_table, success_vs_budget
+    rows = [dict(method=f"{k}{n}", n_sims=n, success=bool(i % 2), mean_decision_s=0.01 * n)
+            for k in ("pomcp", "wmpomcp") for n in (32, 128) for i in range(4)]
+    df = pd.DataFrame(rows)
+    t = budget_table(df)
+    assert set(t.simulator) == {"physics", "learned WM"} and len(t) == 4
+    assert all(t.lo <= t.rate) and all(t.rate <= t.hi)
+    success_vs_budget(df, tmp_path / "b.png", reference=("belief PPO", 0.45))
+    assert (tmp_path / "b.png").stat().st_size > 1000
