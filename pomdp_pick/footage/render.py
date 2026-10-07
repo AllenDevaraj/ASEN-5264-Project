@@ -122,8 +122,14 @@ class Stage:
         return np.asarray(img)
 
     def _hud(self, img, f):
-        dr = ImageDraw.Draw(img)
         pad = self.h // 40
+        band = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        bd = ImageDraw.Draw(band)
+        top = pad + int(self.font_b.size * 1.4) + self.font.size + pad
+        bd.rectangle([0, 0, int(self.w * 0.5), top], fill=(10, 12, 18, 150))
+        bd.rectangle([0, self.h - self.font_b.size - 2 * pad, int(self.w * 0.5), self.h], fill=(10, 12, 18, 150))
+        img.paste(Image.alpha_composite(img.convert("RGBA"), band).convert("RGB"))
+        dr = ImageDraw.Draw(img)
         dr.text((pad, pad), f["title"], font=self.font_b, fill=(245, 245, 245))
         dr.text((pad, pad + int(self.font_b.size * 1.4)), f["subtitle"], font=self.font, fill=(190, 195, 205))
         dr.text((pad, self.h - pad - self.font_b.size), f["status"], font=self.font_b, fill=f["status_col"])
@@ -160,6 +166,7 @@ def render_episode(npz, out_mp4, title, subtitle="", w=1280, h=720, inset=True, 
     lifted = rec["qpos"][:, adr + 2] > 0.02
     rec["lifted"] = lifted
     rec["last_lift"] = int(np.nonzero(lifted)[0][-1]) if lifted.any() else len(lifted)
+    ever_lifted = np.maximum.accumulate(lifted)   # belief stops updating once the brick is held
     cam = FollowCam(st.cam)
     cam.look[:] = [rec["p"][0][0], rec["p"][0][1], 0.02]
     out_mp4 = Path(out_mp4)
@@ -173,7 +180,7 @@ def render_episode(npz, out_mp4, title, subtitle="", w=1280, h=720, inset=True, 
         cam.update(rec["p"][i])
         status, col = _status(rec, i, n_attempts)
         f = dict(qpos=rec["qpos"][i], particles=rec["particles"][i], mu=rec["mu"][i], reading=rec["reading"][i],
-                 visible=bool(rec["visible"][i]), goal=rec["goal"], mode=mode, lifted=bool(lifted[i]),
+                 visible=bool(rec["visible"][i]), goal=rec["goal"], mode=mode, lifted=bool(ever_lifted[i]),
                  title=title, subtitle=subtitle or f"camera noise σ = {1000 * float(rec['sigma_ep']):.0f} mm · "
                  f"t = {rec['t'][i]:4.1f} s", status=status, status_col=col, inset=inset)
         ff.stdin.write(st.frame(f).tobytes())
