@@ -1787,3 +1787,12 @@ framestack_s1 started at 08:49.
 - *Why:* the user's original request asked for 5 seeds. Given commit-vs-wander bimodality across seeds, 3 seeds per method leave the main comparison underpowered.
 - *Order:* phase 2 (seeds 0–2 plus the 200-episode eval) → `configs/queue_phase3.json` (seeds 3–4, ~22 h, then eval of the new runs) → `configs/queue_pomcp.json`. The 512-sim POMCP budget stays last, so it is what gets cut if time runs short.
 - *Cost if wrong:* POMCP results arrive about a day later.
+
+## v2 — framestack_s1 finished: 13.5% (2026-10-08 10:16)
+
+1M steps in 1 h 27 min. Last 1000 episodes:
+- 13.5% success
+- 1.90 attempts
+- 68 decisions per episode
+
+Same intermediate wander mode as framestack s0 (16.6%). recurrent_s1 started at 10:16.
