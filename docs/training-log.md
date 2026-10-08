@@ -1782,3 +1782,8 @@ Early random commits nearly always miss (−1), so the policy learns to avoid co
 - For the write-up: this exploration failure is a property of the sparse grasp reward under a 1M-step budget. Methods that make committing look better early (e.g. a curriculum with an easier grasp gate, or a commit-exploration bonus) are the natural fix. Not done here, to keep the protocol fixed.
 
 framestack_s1 started at 08:49.
+
+**Ruling (08:55): add seeds 3–4 for all five methods before the POMCP study.**
+- *Why:* the user's original request asked for 5 seeds. Given commit-vs-wander bimodality across seeds, 3 seeds per method leave the main comparison underpowered.
+- *Order:* phase 2 (seeds 0–2 plus the 200-episode eval) → `configs/queue_phase3.json` (seeds 3–4, ~22 h, then eval of the new runs) → `configs/queue_pomcp.json`. The 512-sim POMCP budget stays last, so it is what gets cut if time runs short.
+- *Cost if wrong:* POMCP results arrive about a day later.

@@ -1,0 +1,132 @@
+[
+ {
+  "name": "oracle_s3",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "oracle",
+   "--seed",
+   "3"
+  ]
+ },
+ {
+  "name": "plain_s3",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "plain",
+   "--seed",
+   "3"
+  ]
+ },
+ {
+  "name": "belief_s3",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "belief",
+   "--seed",
+   "3"
+  ]
+ },
+ {
+  "name": "framestack_s3",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "framestack",
+   "--seed",
+   "3"
+  ]
+ },
+ {
+  "name": "recurrent_s3",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "recurrent",
+   "--seed",
+   "3"
+  ]
+ },
+ {
+  "name": "oracle_s4",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "oracle",
+   "--seed",
+   "4"
+  ]
+ },
+ {
+  "name": "plain_s4",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "plain",
+   "--seed",
+   "4"
+  ]
+ },
+ {
+  "name": "belief_s4",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "belief",
+   "--seed",
+   "4"
+  ]
+ },
+ {
+  "name": "framestack_s4",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "framestack",
+   "--seed",
+   "4"
+  ]
+ },
+ {
+  "name": "recurrent_s4",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "recurrent",
+   "--seed",
+   "4"
+  ]
+ },
+ {
+  "name": "eval_seeds34_n200",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.eval.evaluate",
+   "--episodes",
+   "200"
+  ]
+ }
+]
