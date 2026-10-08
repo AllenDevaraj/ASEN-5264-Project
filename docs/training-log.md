@@ -1739,3 +1739,21 @@ Made with `tools/showcase.py` at 1280×720 from seed-0 models, σ = 10 mm, share
 | `runs/footage/showcase/pomcp.mp4` (7.0 s) | POMCP, 32 sims, episode 0 | success on the first try |
 
 Among the 12 recorded belief episodes, numbers 2 and 9 held the brick 8–9 mm off-centre and then failed the place: the brick sat askew in the jaws and landed tilted or off the goal. The physics punishes sloppy grasps beyond the grasp itself.
+
+## v2 — plain_s1 finished: 41.7% (vs 13.2% for seed 0) (2026-10-08 07:27)
+
+1M steps in 2 h 20 min. Last 1000 training episodes:
+- 41.7% success
+- 1.71 attempts
+- 20.4 decisions per episode
+
+| steps | 0.2M | 0.4M | 0.6M | 0.8M | 1.0M |
+|---|---|---|---|---|---|
+| plain s0 success (decisions/ep.) | 11% (97) | 9% (139) | 12% (106) | 13% (109) | 13% (96) |
+| plain s1 success (decisions/ep.) | 24% (42) | 30% (36) | 37% (23) | 39% (23) | 42% (20) |
+
+Seed 1 learned early to approach and commit, while seed 0 got stuck in a wandering mode. **Seed 0 overstated the memory gap.** A memoryless policy can do reasonably well on the training mix, because σ_ep is log-uniform over 2–20 mm (median ~6 mm), where a single close-range reading is often within the ±6 mm grasp tolerance.
+
+The scientific question is therefore *where* belief helps, not *whether* it beats plain on average. The per-σ eval answers it: the prediction is that the gap is small at 2–5 mm and grows at 15–30 mm. For the gate, plain_s0's commit error already grew from 10.5 to 28.8 mm across σ.
+
+The report must use all three seeds and the IQM, never seed 0 alone. belief_s1 started at 07:27.
