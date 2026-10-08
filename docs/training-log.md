@@ -1757,3 +1757,28 @@ Seed 1 learned early to approach and commit, while seed 0 got stuck in a wanderi
 The scientific question is therefore *where* belief helps, not *whether* it beats plain on average. The per-σ eval answers it: the prediction is that the gap is small at 2–5 mm and grows at 15–30 mm. For the gate, plain_s0's commit error already grew from 10.5 to 28.8 mm across σ.
 
 The report must use all three seeds and the IQM, never seed 0 alone. belief_s1 started at 07:27.
+
+## v2 — belief_s1 finished: 18.1% (vs 51.8% for seed 0) (2026-10-08 08:49)
+
+1M steps in 1 h 22 min. Last 1000 training episodes:
+- 18.1% success
+- 1.27 attempts
+- 99 decisions per episode
+
+| steps | 0.1M | 0.2M | 0.4M | 0.6M | 0.8M | 1.0M |
+|---|---|---|---|---|---|---|
+| success | 2% | 3% | 10% | 13% | 16% | 18% |
+| decisions per episode | 74 | 140 | 98 | 110 | 97 | 99 |
+
+**Cross-seed pattern (4 of 7 finished runs).** Every method has two training modes:
+- **"Commit mode":** about 12–24 decisions per episode, high success. Seen in oracle s0 and s1, belief s0, plain s1.
+- **"Wander mode":** about 95–185 decisions per episode, low success. Seen in plain s0, framestack s0, belief s1, and recurrent s0 in the extreme.
+
+Early random commits nearly always miss (−1), so the policy learns to avoid committing before it ever finds the +15 grasp. Which mode a seed falls into is decided in roughly the first 200k steps. The seed, not the observation type, decides this; the observation type then sets how high a commit-mode run can go.
+
+**Consequences:**
+- With 3 seeds per method, CIs on the matrix will be wide. Report IQM with bootstrap CIs, and show per-seed points.
+- If compute remains after the POMCP study, adding seeds 3–4 for every method (about 20 h) is the most valuable extra experiment, more so than a tuned-LSTM ablation.
+- For the write-up: this exploration failure is a property of the sparse grasp reward under a 1M-step budget. Methods that make committing look better early (e.g. a curriculum with an easier grasp gate, or a commit-exploration bonus) are the natural fix. Not done here, to keep the protocol fixed.
+
+framestack_s1 started at 08:49.
