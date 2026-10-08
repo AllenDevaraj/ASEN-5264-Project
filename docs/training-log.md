@@ -1818,3 +1818,9 @@ belief_s2: last1000 succ 0.002 att 0.19 len 187.2 wall_h 1.16
 ## v2 — framestack_s2 finished (2026-10-08 21:13)
 
 framestack_s2: last1000 succ 0.060 att 0.77 len 161.3 wall_h 1.26
+
+## v2 — recurrent_s2 finished (2026-10-09 00:50)
+
+recurrent_s2: last1000 succ 0.007 att 0.26 len 188.5 wall_h 3.58
+
+Phase-2 training is done. eval_all_n200 is starting.
