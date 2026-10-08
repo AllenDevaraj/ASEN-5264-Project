@@ -1814,3 +1814,7 @@ plain_s2: last1000 succ 0.472 att 1.40 len 24.3 wall_h 2.12
 ## v2 — belief_s2 finished (2026-10-08 19:59)
 
 belief_s2: last1000 succ 0.002 att 0.19 len 187.2 wall_h 1.16
+
+## v2 — framestack_s2 finished (2026-10-08 21:13)
+
+framestack_s2: last1000 succ 0.060 att 0.77 len 161.3 wall_h 1.26
