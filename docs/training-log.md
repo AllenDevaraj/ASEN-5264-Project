@@ -1727,3 +1727,15 @@ Seed 1's curve:
 It was slower and still creeping up at the end. This is ordinary PPO seed variance, and the reason the protocol uses three seeds and IQM over seeds × σ instead of one run. The final comparison uses the deterministic 200-episode eval, not these stochastic training rates.
 
 plain_s1 started at 05:07.
+
+## v2 — showcase clips (2026-10-08 07:20)
+
+Made with `tools/showcase.py` at 1280×720 from seed-0 models, σ = 10 mm, shared eval seeds. Rendering all three took about 4 minutes, under the watchdog.
+
+| clip | source | what it shows |
+|---|---|---|
+| `runs/footage/showcase/hero.mp4` (5.3 s) | belief, episode 6 | one clean grasp, 4.9 mm commit error |
+| `runs/footage/showcase/recovery.mp4` (13.4 s) | belief, episode 3 | two misses at ~16 mm physically shove the brick; the particle cloud spreads, re-tightens on new readings, and the third attempt (3.2 mm) grasps and places |
+| `runs/footage/showcase/pomcp.mp4` (7.0 s) | POMCP, 32 sims, episode 0 | success on the first try |
+
+Among the 12 recorded belief episodes, numbers 2 and 9 held the brick 8–9 mm off-centre and then failed the place: the brick sat askew in the jaws and landed tilted or off the goal. The physics punishes sloppy grasps beyond the grasp itself.
