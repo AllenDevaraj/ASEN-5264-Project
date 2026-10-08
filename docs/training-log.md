@@ -1796,3 +1796,9 @@ framestack_s1 started at 08:49.
 - 68 decisions per episode
 
 Same intermediate wander mode as framestack s0 (16.6%). recurrent_s1 started at 10:16.
+
+## v2 — recurrent_s1 finished (2026-10-08 13:52)
+
+recurrent_s1: last1000 succ 0.001 att 0.09 len 192.7 wall_h 3.60
+
+Seed 1 shows the same commit-avoidance collapse as seed 0. Next: oracle_s2.
