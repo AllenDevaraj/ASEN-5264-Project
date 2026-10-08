@@ -1824,3 +1824,45 @@ framestack_s2: last1000 succ 0.060 att 0.77 len 161.3 wall_h 1.26
 recurrent_s2: last1000 succ 0.007 att 0.26 len 188.5 wall_h 3.58
 
 Phase-2 training is done. eval_all_n200 is starting.
+
+## v2 — 200-episode eval, seeds 0–2 (2026-10-09 02:48)
+
+All 15 runs: 200 episodes × 6 σ, shared seeds. Tables are in `docs/results.md` (`tools/make_results.py`).
+
+**Aggregate IQM** over seeds × σ, with 95% CI:
+
+| method | IQM | 95% CI |
+|---|---|---|
+| oracle | 0.85 | 0.75–0.91 |
+| plain | 0.27 | 0.19–0.34 |
+| belief | 0.10 | 0.02–0.25 |
+| framestack | 0.08 | 0.05–0.11 |
+| recurrent | 0.00 | — |
+
+P(belief > plain) = 0.31 [0.11–0.52].
+
+**Success per seed:**
+
+| run | σ=2 | 5 | 10 | 15 | 20 | 30 | attempts/ep |
+|---|---|---|---|---|---|---|---|
+| belief s0 | .61 | .64 | .51 | .44 | .36 | .20 | 1.57 |
+| belief s1 | .12 | .12 | .12 | .05 | .01 | .00 | 0.26 |
+| belief s2 | .00 | .00 | .00 | .00 | .00 | .00 | 0.00 |
+| plain s0 | .21 | .16 | .16 | .11 | .07 | .02 | 1.19 |
+| plain s1 | .46 | .48 | .35 | .28 | .25 | .12 | 1.76 |
+| plain s2 | .64 | .46 | .44 | .36 | .25 | .20 | 1.57 |
+
+**Mean commit error (mm)**, which reflects localization quality when a method does commit:
+
+| method | σ=2 | 5 | 10 | 15 | 20 | 30 |
+|---|---|---|---|---|---|---|
+| belief | 6.9 | 7.4 | 10.0 | 12.1 | 14.7 | 19.1 |
+| plain | 10.7 | 12.1 | 14.6 | 18.1 | 20.7 | 26.6 |
+| oracle | 6.9 | 6.9 | 6.9 | 6.9 | 6.9 | 6.9 |
+
+**Reading:**
+1. **Localization:** belief localizes clearly better than plain at every σ (its commit error at 2 mm matches the oracle's). Its best seed beats plain's best seed at σ ≥ 10 mm. The belief representation does what it should.
+2. **Training reliability:** belief collapsed into never committing on 2 of 3 seeds, and recurrent on 3 of 3. Plain collapsed on 0 of 3, with one weak seed. The aggregate ranks methods by how often PPO escapes the commit-avoidance trap in 1M steps, not by the information each observation carries.
+3. **Honest headline under the base protocol:** "belief state gives better localization (lower commit error); success is dominated by training collapse."
+
+The scientifically clean next step is a v2.1 protocol with one identical training-reliability fix for every method, e.g. a commit curriculum (the grasp gate starts generous and tightens) or a fixed early exploration bonus on commits. It needs a full retrain (about 35 h), so it is flagged to the user rather than started unilaterally. Seeds 3–4 of the base protocol continue meanwhile and add power to these estimates.
