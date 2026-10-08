@@ -96,7 +96,7 @@ Estimating σ_ep jointly is what keeps the filter calibrated at 30 mm. v1's fixe
 | plain | 0.17 | 0.14 | 0.15 | 0.08 | 0.08 | 0.02 |
 | plain commit error (mm) | 10.5 | 13.1 | 15.6 | 19.0 | 23.3 | 28.8 |
 
-A memoryless policy commits roughly 10 mm off even at 2 mm noise. Trained across noise levels, it cannot tell how far to trust one reading.
+At seed 0, a memoryless policy commits roughly 10 mm off even at 2 mm noise. Trained across noise levels, it cannot tell how far to trust one reading. **Seed 0 overstates the gap:** plain PPO's seed 1 learned to approach and commit early and reached 42% training success, against 13% for seed 0. The multi-seed, per-σ comparison in §4.2 is the result to cite.
 
 ### 4.2 Main comparison
 
