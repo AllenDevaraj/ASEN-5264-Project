@@ -1903,3 +1903,7 @@ This is the known cost of assist curricula: behaviour tuned to the assisted task
 ## v2.1 plain_s0 finished (2026-10-09 13:51)
 
 success/decisions: v21 plain_s0: 0.3M 0.80/9  0.5M 0.42/14  0.75M 0.42/18  1.0M 0.45/23  wall 3.00h
+
+## v2.1 belief_s0 finished (2026-10-09 16:49)
+
+success/decisions: v21 belief_s0: 0.3M 0.84/10  0.5M 0.41/14  0.75M 0.45/17  1.0M 0.47/18  wall 2.98h
