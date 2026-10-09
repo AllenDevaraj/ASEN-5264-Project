@@ -1888,3 +1888,14 @@ This targets the observed failure: early commits nearly always miss (−1), so p
 - Same hyperparameters and 1M steps. Then the 200-episode eval, then the POMCP study.
 
 Tests: `tests/test_assist.py` covers four things: no assist misses a 15 mm-offset grasp; the assist rescues it while logging the pre-assist error; the schedule; and training pushes the assist into the envs. Suite 86/86.
+
+## v2.1 — oracle_s0 finished (2026-10-09 10:50)
+
+| steps | 0.3M | 0.5M | 0.6M | 0.8M | 1.0M |
+|---|---|---|---|---|---|
+| training success | 92% (assist 16 mm) | 60% (assist 0) | 59% | 64% | 64% |
+| decisions per episode | 7.3 | 8.6 | 9.1 | 9.5 | 9.0 |
+
+The assist worked as an exploration aid: there was no early collapse, and committing was learned at once. But the oracle learned to commit fast and somewhat sloppily (about 7 decisions per episode). When the assist reached 0, success dropped to about 60% and recovered only slowly; base-protocol oracle seeds ranged 61–88%.
+
+This is the known cost of assist curricula: behaviour tuned to the assisted task carries over. The comparison that matters is plain vs belief under the same schedule, which is next.
