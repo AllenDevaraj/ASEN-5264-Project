@@ -1866,3 +1866,25 @@ P(belief > plain) = 0.31 [0.11–0.52].
 3. **Honest headline under the base protocol:** "belief state gives better localization (lower commit error); success is dominated by training collapse."
 
 The scientifically clean next step is a v2.1 protocol with one identical training-reliability fix for every method, e.g. a commit curriculum (the grasp gate starts generous and tightens) or a fixed early exploration bonus on commits. It needs a full retrain (about 35 h), so it is flagged to the user rather than started unilaterally. Seeds 3–4 of the base protocol continue meanwhile and add power to these estimates.
+
+## v2.1 — grasp-assist curriculum (user decision, 2026-10-09 07:10)
+
+**Decision (user):** stop the base-protocol seeds 3–4 and retrain under one identical training-reliability fix.
+
+What happened to the seed 3–4 runs:
+- oracle_s3 and plain_s3 had finished while the decision was pending. They are kept as extra base-protocol data, not evaluated yet.
+- The partial belief_s3 run was stopped cleanly and moved to `runs/archive/aborted_v2/`.
+
+**The fix: grasp-assist curriculum, training only, identical for every method.**
+- On commit, the jaw centre is nudged up to `assist_mm` toward the *true* brick, then the physical grasp runs.
+- `assist_mm` anneals linearly from 40 mm to 0 by 50% of training (`assist_at`). The last 500k steps and all evaluation use the real ±6 mm tolerance.
+- The logged commit error is the policy's own error, before the nudge.
+
+This targets the observed failure: early commits nearly always miss (−1), so policies learn never to commit. With the assist, early commits within about 46 mm pay +15, so committing is reinforced before the policy has to localize precisely.
+
+**Matrix:**
+- oracle, plain, belief, framestack × seeds 0–2, written to `runs_v21/`.
+- Recurrent is dropped: it collapsed on 3/3 base seeds and costs 3.6 h per run, and the user approved dropping it.
+- Same hyperparameters and 1M steps. Then the 200-episode eval, then the POMCP study.
+
+Tests: `tests/test_assist.py` covers four things: no assist misses a 15 mm-offset grasp; the assist rescues it while logging the pre-assist error; the schedule; and training pushes the assist into the envs. Suite 86/86.

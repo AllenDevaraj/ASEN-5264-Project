@@ -38,11 +38,19 @@ def _atomic(save_fn, path):
     os.replace(tmp if os.path.exists(tmp) else tmp + ".zip", path)
 
 
+def assist_at(ts, total, sched):
+    """v2.1 grasp-assist (mm) at timestep ts: linear from start_mm to 0 at until_frac of training."""
+    if not sched:
+        return 0.0
+    end = sched["until_frac"] * total
+    return 0.0 if ts >= end else float(sched["start_mm"]) * (1.0 - ts / end)
+
+
 def _linear(lr):
     return lambda frac: lr * frac
 
 
-def train(method, seed, total_steps, out_root="runs", n_envs=4, ckpt_every=100_000, hparams=None):
+def train(method, seed, total_steps, out_root="runs", n_envs=4, ckpt_every=100_000, hparams=None, assist=None):
     from sb3_contrib import RecurrentPPO
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback
@@ -82,18 +90,26 @@ def train(method, seed, total_steps, out_root="runs", n_envs=4, ckpt_every=100_0
     # SB3 seeds envs with seed+rank, which overlaps across runs and replays on resume; override.
     venv.seed(env_seed_base(seed, model.num_timesteps))
 
+    state = {"assist": 0.0}
+
     def save(ts, done):
         # model and stats first, progress.json last: a kill mid-save never claims unsaved progress
         _atomic(lambda p: model.save(p), run / "model.zip")
         _atomic(lambda p: venv.save(p), run / "vecnorm.pkl")
         _atomic(lambda p: open(p, "w").write(json.dumps({"method": method, "seed": seed, "timesteps": int(ts),
                                                           "done": done, "target": int(total_steps),
-                                                          "hparams": hp})), prog_path)
+                                                          "hparams": hp, "assist": assist,
+                                                          "last_assist_mm": state["assist"]})), prog_path)
 
     class Ckpt(BaseCallback):
         def __init__(self):
             super().__init__()
             self.next = model.num_timesteps + ckpt_every
+
+        def _on_rollout_start(self):
+            if assist:
+                state["assist"] = assist_at(self.num_timesteps, total_steps, assist)
+                venv.env_method("set_assist", state["assist"])
 
         def _on_step(self):
             if self.num_timesteps >= self.next:
@@ -120,7 +136,7 @@ def main():
     cfg = yaml.safe_load(open(a.config)) if os.path.exists(a.config) else {}
     steps = a.steps or cfg.get("total_steps", 1_000_000)
     train(a.method, a.seed, steps, a.out, n_envs=cfg.get("n_envs", 4), ckpt_every=cfg.get("ckpt_every", 100_000),
-          hparams=cfg.get("hparams"))
+          hparams=cfg.get("hparams"), assist=cfg.get("assist"))
 
 
 if __name__ == "__main__":

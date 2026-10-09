@@ -38,6 +38,12 @@ class PickPlaceEnv(gym.Env):
         self.action_space = gym.spaces.Box(-1.0, 1.0, (5,), np.float32)
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, (DIMS[obs_mode],), np.float32)
         self.pf = BeliefFilter(drift=drift)
+        self.assist_mm = 0.0
+
+    def set_assist(self, mm):
+        """Training-only grasp-assist curriculum (v2.1): on commit, nudge the jaw centre up to `mm`
+        toward the true brick before the physical grasp. Identical for every method; 0 at eval."""
+        self.assist_mm = float(mm)
 
     # ---------------- episode setup ----------------
     def _spawn(self, rng):
@@ -149,6 +155,13 @@ class PickPlaceEnv(gym.Env):
             bx, by, _, _ = self.arm.brick_pose()
             self.commit_err.append(1000 * math.hypot(self.arm.p[0] - bx, self.arm.p[1] - by))
             self.std_at_commit.append(float(np.hypot(*self.pf.summary()["std"][:2]) * 1000))
+            if self.assist_mm > 0:
+                d = np.array([bx - self.arm.p[0], by - self.arm.p[1]])
+                n = float(np.linalg.norm(d))
+                if n > 1e-9:
+                    step = d / n * min(n, self.assist_mm / 1000.0)
+                    self.arm.move(np.array([self.arm.p[0] + step[0], self.arm.p[1] + step[1], self.arm.p[2]]),
+                                  self.arm.yaw, 0.1, self.frame_cb)
             if self.arm.grasp(self.frame_cb):
                 reward += 5.0
                 self.held = True

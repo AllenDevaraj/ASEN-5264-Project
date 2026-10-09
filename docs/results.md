@@ -8,8 +8,8 @@
 |:-----------|----------:|--------:|
 | belief     |         3 |   0.234 |
 | framestack |         3 |   0.121 |
-| oracle     |         3 |   0.774 |
-| plain      |         3 |   0.340 |
+| oracle     |         4 |   0.777 |
+| plain      |         4 |   0.256 |
 | recurrent  |         3 |   0.004 |
 
 ## Success vs camera noise (200 episodes per σ per seed, shared seeds)
@@ -27,16 +27,16 @@
 | method | IQM success (seeds × σ) | 95% CI |
 |---|---|---|
 | oracle | 0.847 | 0.754–0.907 |
-| belief | 0.096 | 0.023–0.249 |
+| belief | 0.096 | 0.022–0.258 |
 | recurrent | 0.000 | 0.000–0.000 |
-| framestack | 0.080 | 0.046–0.106 |
-| plain | 0.266 | 0.192–0.338 |
+| framestack | 0.080 | 0.045–0.107 |
+| plain | 0.266 | 0.191–0.341 |
 
 | comparison | P(improvement) | 95% CI |
 |---|---|---|
 | P(belief > oracle) | 0.000 | 0.000–0.000 |
 | P(belief > recurrent) | 0.806 | 0.694–0.917 |
-| P(belief > framestack) | 0.426 | 0.222–0.648 |
+| P(belief > framestack) | 0.426 | 0.204–0.648 |
 | P(belief > plain) | 0.306 | 0.111–0.519 |
 
 

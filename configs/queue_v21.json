@@ -1,0 +1,206 @@
+[
+ {
+  "name": "v21_oracle_s0",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "oracle",
+   "--seed",
+   "0",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_plain_s0",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "plain",
+   "--seed",
+   "0",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_belief_s0",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "belief",
+   "--seed",
+   "0",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_framestack_s0",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "framestack",
+   "--seed",
+   "0",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_oracle_s1",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "oracle",
+   "--seed",
+   "1",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_plain_s1",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "plain",
+   "--seed",
+   "1",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_belief_s1",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "belief",
+   "--seed",
+   "1",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_framestack_s1",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "framestack",
+   "--seed",
+   "1",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_oracle_s2",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "oracle",
+   "--seed",
+   "2",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_plain_s2",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "plain",
+   "--seed",
+   "2",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_belief_s2",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "belief",
+   "--seed",
+   "2",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_framestack_s2",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.agents.train",
+   "--method",
+   "framestack",
+   "--seed",
+   "2",
+   "--config",
+   "configs/train_v21.yaml",
+   "--out",
+   "runs_v21"
+  ]
+ },
+ {
+  "name": "v21_eval_n200",
+  "cmd": [
+   "./vpy",
+   "-m",
+   "pomdp_pick.eval.evaluate",
+   "--runs",
+   "runs_v21",
+   "--episodes",
+   "200"
+  ]
+ }
+]

@@ -1,0 +1,13 @@
+framestack_s0
+recurrent_s0
+oracle_s1
+plain_s1
+belief_s1
+framestack_s1
+recurrent_s1
+oracle_s2
+plain_s2
+belief_s2
+framestack_s2
+recurrent_s2
+eval_all_n200

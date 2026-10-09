@@ -1,0 +1,13 @@
+# v2.1: base protocol + training-only grasp-assist curriculum (identical for all methods)
+total_steps: 1000000
+n_envs: 1
+ckpt_every: 100000
+hparams:
+  n_steps: 1024
+  batch_size: 256
+  n_epochs: 10
+  learning_rate: 0.0003
+  ent_coef: 0.01
+assist:
+  start_mm: 40.0
+  until_frac: 0.5
