@@ -1907,3 +1907,7 @@ success/decisions: v21 plain_s0: 0.3M 0.80/9  0.5M 0.42/14  0.75M 0.42/18  1.0M 
 ## v2.1 belief_s0 finished (2026-10-09 16:49)
 
 success/decisions: v21 belief_s0: 0.3M 0.84/10  0.5M 0.41/14  0.75M 0.45/17  1.0M 0.47/18  wall 2.98h
+
+## v2.1 framestack_s0 finished (2026-10-09 19:53)
+
+success/decisions: v21 framestack_s0: 0.3M 0.79/9  0.5M 0.38/15  0.75M 0.37/14  1.0M 0.41/16  wall 3.07h
