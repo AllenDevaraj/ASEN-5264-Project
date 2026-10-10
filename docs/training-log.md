@@ -1944,3 +1944,11 @@ success/decisions: v21 plain_s2: 0.3M 0.79/10  0.5M 0.40/16  0.75M 0.38/22  1.0M
 ## v2.1 belief_s2 finished (2026-10-10 18:49)
 
 success/decisions: v21 belief_s2: 0.3M 0.82/11  0.5M 0.48/18  0.75M 0.49/20  1.0M 0.53/21  wall 2.83h (base-protocol seed 2 collapsed to 0.2%)
+
+## v2.1 framestack_s2 finished (2026-10-10 22:13)
+
+success/decisions: v21 framestack_s2: 0.3M 0.80/10  0.5M 0.38/12  0.75M 0.39/14  1.0M 0.39/13  wall 3.41h (heavy thermal pausing, ~1h of SIGSTOP)
+
+All 12 v2.1 runs complete, none collapsed. Final training success (last 1000 eps), seeds 0/1/2:
+oracle 0.64/0.68/0.67 · belief 0.47/0.52/0.53 · plain 0.45/0.38/0.43 · framestack 0.41/0.37/0.39.
+`v21_eval_n200` (200 eps × 6 σ × 12 runs) started automatically at 22:13.
