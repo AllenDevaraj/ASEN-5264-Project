@@ -1952,3 +1952,19 @@ success/decisions: v21 framestack_s2: 0.3M 0.80/10  0.5M 0.38/12  0.75M 0.39/14 
 All 12 v2.1 runs complete, none collapsed. Final training success (last 1000 eps), seeds 0/1/2:
 oracle 0.64/0.68/0.67 · belief 0.47/0.52/0.53 · plain 0.45/0.38/0.43 · framestack 0.41/0.37/0.39.
 `v21_eval_n200` (200 eps × 6 σ × 12 runs) started automatically at 22:13.
+
+## v2.1 evaluation (2026-10-10 23:04)
+
+`v21_eval_n200`: 12 runs × 6 σ × 200 shared episodes → `runs_v21/eval/`. `tools/make_results.py --runs runs_v21 --tag v21` → `docs/results_v21.md`, `docs/figs/v21/`.
+
+- IQM: oracle 0.728, **belief 0.435** [0.420–0.452], plain 0.357 [0.342–0.370], framestack 0.332.
+- P(belief > plain) = 0.89, P(belief > framestack) = 0.94.
+- Belief beats plain at every σ; largest gap at 15 mm (0.42 vs 0.30).
+- Per-seed mean success:
+  - belief 0.39/0.41/0.46;
+  - plain 0.37/0.35/0.34;
+  - framestack 0.32/0.33/0.34;
+  - oracle 0.65/0.80/0.73.
+- Commit error @10 mm: belief 10.5, plain 12.4, framestack 13.6, oracle 6.8.
+- Curriculum cost: oracle 0.83 → 0.73. Gains: belief 0.18 → 0.42, plain 0.28 → 0.35, framestack 0.08 → 0.33.
+- Report §4 rewritten: base protocol as motivation (§4.1), v2.1 as the main result (§4.2).
