@@ -151,7 +151,21 @@ The curriculum makes early commits pay off, which removes the commit-avoidance t
 
 ### 4.4 World-model accuracy
 
-*Pending:* from `runs/world_model/report.json`, reporting held-out-episode R² per dimension and grasp AUC.
+**Setup:**
+- *Data:* 200k transitions from v2.1 belief-PPO seed 0, with 30% random macros (`runs_v21/world_model/`).
+- *Validation:* 31k transitions from held-out *episodes*, never seen in training.
+- *Grasp head:* evaluated on the 2,577 held-out commits.
+
+| predicted Δ | gripper P (x, y, z) | gripper yaw (sin, cos 2ψ) | belief mean μ_rel (x, y) | belief yaw (sin, cos 2θ) | belief std σx, σy | σθ | σ_ep |
+|---|---|---|---|---|---|---|---|
+| held-out R² | 0.98 / 0.98 / 0.98 | 0.97 / 0.97 | 0.79 / 0.67 | 0.05 / 0.08 | 0.58 / 0.43 | 0.24 | 0.16 |
+
+**P(grasp | belief, commit): AUC 0.85.**
+
+**Reading the table:**
+- *What it gets right:* the model learns the deterministic part of the world almost perfectly, which is where the gripper goes. From the belief alone it ranks commits well: a commit with a tight, well-centred belief is far more likely to grasp.
+- *What it cannot learn:* the belief update itself. How the filter's mean and spread move depends on the *next noisy reading*, which is random given the current belief. A deterministic MLP can only predict its expectation, hence R² of 0.05–0.6 on those dimensions.
+- *Consequence for planning:* WM-POMCP imagines a single, averaged future. It cannot represent that "looking again might reveal the brick is elsewhere", which is the value of information. Physics POMCP gets that value by sampling a particle as the true state in each simulation.
 
 ## 5. Limitations
 

@@ -1968,3 +1968,11 @@ oracle 0.64/0.68/0.67 · belief 0.47/0.52/0.53 · plain 0.45/0.38/0.43 · frames
 - Commit error @10 mm: belief 10.5, plain 12.4, framestack 13.6, oracle 6.8.
 - Curriculum cost: oracle 0.83 → 0.73. Gains: belief 0.18 → 0.42, plain 0.28 → 0.35, framestack 0.08 → 0.33.
 - Report §4 rewritten: base protocol as motivation (§4.1), v2.1 as the main result (§4.2).
+
+## World model (v2.1, 2026-10-10 23:35)
+
+`wm_collect_fit`: 200k transitions from `runs_v21/belief/seed0`, eps 0.3, ~30 min.
+- Episode-split validation: 31,128 rows, 2,577 commits.
+- R²: gripper 0.97–0.98; μ_rel 0.79/0.67; belief yaw ≈0.05/0.08; σx/σy 0.58/0.43; σθ 0.24; σ_ep 0.16.
+- Grasp AUC 0.854.
+- Low R² on belief dims = irreducible observation randomness for a deterministic model (report §4.4).
