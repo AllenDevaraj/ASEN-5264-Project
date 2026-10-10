@@ -1,6 +1,6 @@
 # Picking a brick you can't quite see: memory, belief and planning for a physical pick-and-place POMDP
 
-*SO-ARM101 in MuJoCo · v2 technical report (draft; results sections are filled in from `runs/eval/*.csv`)*
+*SO-ARM101 in MuJoCo · v2 technical report. Main results: `runs_v21/eval/*.csv` (v2.1 protocol, §4.2)*
 
 ## 1. Problem
 
@@ -79,7 +79,7 @@ Estimating σ_ep jointly is what keeps the filter calibrated at 30 mm. v1's fixe
 
 | | |
 |---|---|
-| training seeds | 3 per RL method (0, 1, 2) |
+| training seeds | 3 per RL method (0, 1, 2); v2.1 adds the grasp-assist curriculum (§4.2) |
 | evaluation | 200 episodes × 6 σ levels per run; episode i uses reset seed 10 000 + i for every method |
 | per-cell CI | Wilson 95% |
 | aggregate | IQM across seeds × σ levels with stratified bootstrap 95% CIs, and P(belief > X) (rliable, Agarwal et al., 2021) |
@@ -88,24 +88,62 @@ Estimating σ_ep jointly is what keeps the filter calibrated at 30 mm. v1's fixe
 
 ## 4. Results
 
-### 4.1 Memory gap (seed 0, 100 episodes per σ)
+### 4.1 Base protocol: training reliability, not information, was the bottleneck
 
-| σ_ep (mm) | 2 | 5 | 10 | 15 | 20 | 30 |
+The first protocol (§3, plain PPO from scratch) produced a bimodal outcome. Each run either learned to approach and commit, or fell into a "wander" mode: it avoided the −1 miss penalty by never committing.
+
+| (seeds 0–2, 200 eps × 6 σ) | oracle | plain | belief | frame-stack | recurrent |
+|---|---|---|---|---|---|
+| mean eval success | 0.83 | 0.28 | 0.18 | 0.08 | 0.00 |
+| commit error @ 10 mm (mm) | 6.9 | 14.6 | **10.0** | 24.4 | 35.7 |
+
+Belief PPO localized better than plain at every σ, with lower commit error. Its one committing seed beat plain's best seed at σ ≥ 10 mm. But it collapsed into the wander mode on 2 of 3 seeds, and recurrent PPO collapsed on all three.
+
+Ranking the methods on this protocol would rank their exploration luck, not the value of their observations. The full tables are in [`results.md`](results.md).
+
+### 4.2 Main comparison (v2.1: shared grasp-assist curriculum)
+
+**The fix.** v2.1 adds one training-only curriculum, applied identically to every method. On commit, the gripper is nudged up to `assist` mm toward the true brick before the physical grasp runs. The assist decays linearly from 40 mm to 0 by 50% of training, so the second half and all evaluation run with no assist. Commit error is logged *before* the nudge.
+
+The curriculum makes early commits pay off, which removes the commit-avoidance trap. All 12 runs (4 methods × 3 seeds) trained without collapse. Recurrent PPO was dropped from v2.1 for compute.
+
+**Results** (`runs_v21/eval/*_n200.csv`: 3 seeds × 6 σ × 200 shared episodes; Wilson 95% CIs):
+
+| method | σ=2 | σ=5 | σ=10 | σ=15 | σ=20 | σ=30 (OOD) |
 |---|---|---|---|---|---|---|
-| oracle | 0.93 | 0.93 | 0.93 | 0.93 | 0.93 | 0.93 |
-| plain | 0.17 | 0.14 | 0.15 | 0.08 | 0.08 | 0.02 |
-| plain commit error (mm) | 10.5 | 13.1 | 15.6 | 19.0 | 23.3 | 28.8 |
+| oracle | 0.73 [0.69–0.76] | 0.73 | 0.73 | 0.73 | 0.73 | 0.73 |
+| **belief** | **0.60** [0.56–0.64] | **0.55** [0.51–0.59] | **0.47** [0.43–0.51] | **0.42** [0.38–0.46] | **0.32** [0.29–0.36] | **0.17** [0.15–0.21] |
+| plain | 0.55 [0.50–0.58] | 0.50 [0.46–0.54] | 0.39 [0.35–0.43] | 0.30 [0.27–0.34] | 0.24 [0.21–0.28] | 0.14 [0.11–0.16] |
+| frame-stack | 0.56 [0.52–0.60] | 0.46 [0.42–0.50] | 0.37 [0.33–0.41] | 0.30 [0.26–0.33] | 0.20 [0.17–0.24] | 0.09 [0.07–0.12] |
 
-At seed 0, a memoryless policy commits roughly 10 mm off even at 2 mm noise. Trained across noise levels, it cannot tell how far to trust one reading. **Seed 0 overstates the gap:** plain PPO's seed 1 learned to approach and commit early and reached 42% training success, against 13% for seed 0. The multi-seed, per-σ comparison in §4.2 is the result to cite.
+| aggregate (seeds × σ) | IQM | 95% CI | P(belief > X) |
+|---|---|---|---|
+| oracle | 0.728 | 0.682–0.772 | 0.02 |
+| **belief** | **0.435** | 0.420–0.452 | — |
+| plain | 0.357 | 0.342–0.370 | 0.89 [0.76–0.99] |
+| frame-stack | 0.332 | 0.316–0.349 | 0.94 [0.83–1.00] |
 
-### 4.2 Main comparison
+![success vs sigma](figs/v21/success_vs_sigma.png)
 
-*Pending:* phase 2 is running. To produce it:
+- **Belief PPO beats plain and frame-stack PPO at every noise level**, and the IQM confidence intervals do not overlap. The seed spread is the strongest evidence: belief's worst seed (0.39 mean success) is above plain's best (0.37).
+- **The gap grows with noise:** +0.05 at 2 mm and +0.12 at 15 mm (0.42 vs 0.30, disjoint CIs). It shrinks again at 30 mm, which is outside the training range and where every method approaches the floor.
+- **Mechanism: commit error.** Belief PPO commits closer to the brick at every σ (mean error, mm):
 
-```
-./vpy -m pomdp_pick.eval.stats runs/eval/*_n200.csv
-./vpy -m pomdp_pick.eval.figures docs/figs/v2/success_vs_sigma.png runs/eval/*_n200.csv
-```
+  | σ (mm) | 2 | 5 | 10 | 15 | 20 | 30 |
+  |---|---|---|---|---|---|---|
+  | belief | 7.6 | 8.3 | 10.5 | 12.5 | 14.2 | 19.5 |
+  | plain | 7.9 | 9.4 | 12.4 | 14.7 | 17.2 | 22.4 |
+  | frame-stack | 9.2 | 10.8 | 13.6 | 16.7 | 20.2 | 26.4 |
+  | oracle | 6.8 | 6.8 | 6.8 | 6.8 | 6.8 | 6.8 |
+
+  With roughly ±6 mm of grasp tolerance (§A.1), 2–5 mm of extra error is the difference between a grasp and a shove.
+- **A raw history is not a belief.** Frame-stack PPO sees the last four readings but does worse than plain PPO above 5 mm. Given fixed data, a network learning its own filter from four noisy samples loses to an explicit Bayesian filter that also estimates the noise level.
+- **The curriculum is not free.** Oracle PPO fell from 0.83 (base) to 0.73, and its training success dipped when the assist reached zero. Even so, every partially observed method improved substantially:
+  - belief 0.18 → 0.42;
+  - plain 0.28 → 0.35;
+  - frame-stack 0.08 → 0.33.
+
+  All methods are compared under the same curriculum.
 
 ### 4.3 Planning: budget vs success vs CPU time
 
@@ -124,7 +162,9 @@ At seed 0, a memoryless policy commits roughly 10 mm off even at 2 mm noise. Tra
   - a commit is terminal and pays 15·P(grasp) − (1 − P(grasp)), assuming the place always succeeds;
   - the grasp's time cost is ignored;
   - after a miss, the remaining attempts are ignored.
-- **Small training budget:** 1M steps per run, chosen to fit a laptop. The seed-0 learning curves (`docs/figs/v2/learning_curves.png`) show the oracle and plain PPO had plateaued. Belief PPO was still climbing (42% at 450k steps, 52% at 1M), so its numbers are a lower bound.
+- **Small training budget:** 1M steps per run, 3 seeds, chosen to fit a laptop. Training success at 1M steps (`docs/figs/v21/learning_curves.png`) had flattened after the assist reached zero, but longer training could change the margins.
+- **The curriculum uses privileged information during training:** the assist reads the true brick pose. It is gone by mid-training, and evaluation never uses it. It changes what each method learns, though, and it cost the oracle about 0.1 success (§4.2).
+- **Recurrent PPO was not retrained under v2.1.** Its base-protocol result (collapse on 3 of 3 seeds) says nothing about LSTM memory with a fixed training process.
 
 ## Appendix
 
@@ -137,13 +177,16 @@ At seed 0, a memoryless policy commits roughly 10 mm off even at 2 mm noise. Tra
 
 Yaw error up to ±30° always succeeds.
 
-### A.2 Training (seed 0, last 1000 training episodes)
+### A.2 Training success (v2.1, last 1000 training episodes; seeds 0 / 1 / 2)
 
-| method | success | attempts | decisions per episode | wall time |
+| method | seed 0 | seed 1 | seed 2 | wall time per run |
 |---|---|---|---|---|
-| oracle | 87.5% | 1.03 | 12.5 | 2.7 h |
-| belief | 51.8% | 1.52 | 23.5 | 2.0 h |
-| plain | 13.2% | 1.56 | 95.5 | 1.35 h |
+| oracle | 64% | 68% | 67% | ~4 h |
+| belief | 47% | 52% | 53% | ~2.8 h |
+| plain | 45% | 38% | 43% | ~2.9 h |
+| frame-stack | 41% | 37% | 39% | ~3.4 h |
+
+Base-protocol seed-0 training was oracle 87.5%, belief 51.8% and plain 13.2%. The per-seed log is in `training-log.md`.
 
 ### A.3 Engineering record
 
