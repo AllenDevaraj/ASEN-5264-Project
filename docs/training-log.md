@@ -1936,3 +1936,7 @@ success/decisions: v21 framestack_s1: 0.3M 0.79/11  0.5M 0.39/15  0.75M 0.39/18 
 ## v2.1 oracle_s2 finished (2026-10-10 13:05)
 
 success/decisions: v21 oracle_s2: 0.3M 0.94/7  0.5M 0.54/8  0.75M 0.63/8  1.0M 0.67/9  wall 4.14h
+
+## v2.1 plain_s2 finished (2026-10-10 15:59)
+
+success/decisions: v21 plain_s2: 0.3M 0.79/10  0.5M 0.40/16  0.75M 0.38/22  1.0M 0.43/21  wall 2.89h
