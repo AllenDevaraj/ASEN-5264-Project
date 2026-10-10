@@ -15,7 +15,6 @@ import numpy as np  # noqa: E402
 from pomdp_pick.footage import record as R  # noqa: E402
 from pomdp_pick.footage.render import render_episode  # noqa: E402
 
-OUT = Path("runs/footage/showcase")
 TEXT = {"hero": ("Belief PPO · physical grasp", None),
         "recovery": ("Belief PPO · miss, re-localize, grasp", None),
         "pomcp": ("POMCP · {n} physics simulations per decision", None)}
@@ -28,9 +27,12 @@ def main():
     ap.add_argument("--sims", type=int, default=32)
     ap.add_argument("--tries", type=int, default=6)
     ap.add_argument("--sigma", type=float, default=10.0)
+    ap.add_argument("--out", default="runs/footage/showcase")
+    ap.add_argument("--title", help="override the shot title")
     a = ap.parse_args()
+    OUT = Path(a.out)
     OUT.mkdir(parents=True, exist_ok=True)
-    title = TEXT[a.shot][0].format(n=a.sims)
+    title = a.title or TEXT[a.shot][0].format(n=a.sims)
     src = Path(a.src) if a.src else None
     if a.shot == "pomcp":
         from pomdp_pick.envs.pick_env import PickPlaceEnv

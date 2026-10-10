@@ -23,6 +23,7 @@ TITLES = {"oracle": "Oracle PPO (sees the true pose)", "plain": "Plain PPO (late
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--methods", nargs=2, default=["belief", "plain"])
+    ap.add_argument("--runs", default="runs", help="runs root holding <method>/seed<k>/")
     ap.add_argument("--run-seed", type=int, default=0)
     ap.add_argument("--sigma", type=float, default=10.0)
     ap.add_argument("--n", type=int, default=12)
@@ -31,7 +32,7 @@ def main():
     out = Path(a.out)
     results = {}
     for m in a.methods:
-        mode, act = R.policy_actor(f"runs/{m}/seed{a.run_seed}")
+        mode, act = R.policy_actor(f"{a.runs}/{m}/seed{a.run_seed}")
         env = PickPlaceEnv(mode, sigma_fixed=a.sigma / 1000)
         for i in range(a.n):
             p = out / f"{R.episode_name(m, a.run_seed, a.sigma, i)}.npz"
