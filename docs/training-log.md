@@ -1923,3 +1923,7 @@ success/decisions: v21 plain_s1: 0.3M 0.78/9  0.5M 0.39/14  0.75M 0.40/15  1.0M 
 ## v2.1 belief_s1 finished (2026-10-10 05:42)
 
 success/decisions: v21 belief_s1: 0.3M 0.81/11  0.5M 0.45/12  0.75M 0.52/19  1.0M 0.52/23  wall 2.99h (base-protocol seed 1 collapsed to 18%)
+
+## v2.1 framestack_s1 finished (2026-10-10 08:56)
+
+success/decisions: v21 framestack_s1: 0.3M 0.79/11  0.5M 0.39/15  0.75M 0.39/18  1.0M 0.37/18  wall 3.25h
