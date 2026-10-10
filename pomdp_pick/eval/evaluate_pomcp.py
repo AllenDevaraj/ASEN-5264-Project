@@ -67,19 +67,21 @@ def main():
     ap.add_argument("--episodes", type=int, default=50)
     ap.add_argument("--sigma", type=float, default=10)
     ap.add_argument("--wm", default=None, help="world-model .npz: plan with WMPlanner instead of physics")
+    ap.add_argument("--out-dir", default="runs/eval")
+    ap.add_argument("--max-decisions", type=int, default=400)
     a = ap.parse_args()
     for n in a.sims:
         if a.wm:
             from pomdp_pick.planning.pomcp import WMPlanner
             from pomdp_pick.planning.world_model import WorldModel
             wm = WorldModel.load(a.wm)
-            out = Path("runs/eval") / f"wmpomcp{n}_seed0_n{a.episodes}.csv"
+            out = Path(a.out_dir) / f"wmpomcp{n}_seed0_n{a.episodes}.csv"
             make = (lambda n_: lambda rng: WMPlanner(wm, n_, rng=rng))(n)
         else:
-            out = Path("runs/eval") / f"pomcp{n}_seed0_n{a.episodes}.csv"
+            out = Path(a.out_dir) / f"pomcp{n}_seed0_n{a.episodes}.csv"
             make = None
         if not out.exists():
-            evaluate_pomcp(n, a.sigma, a.episodes, out, make_planner=make)
+            evaluate_pomcp(n, a.sigma, a.episodes, out, max_decisions=a.max_decisions, make_planner=make)
             print("wrote", out, flush=True)
 
 

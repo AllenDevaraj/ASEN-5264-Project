@@ -6,9 +6,11 @@
    "-m",
    "pomdp_pick.planning.collect",
    "--run",
-   "runs/belief/seed0",
+   "runs_v21/belief/seed0",
    "--steps",
-   "200000"
+   "200000",
+   "--out",
+   "runs_v21/world_model/data.npz"
   ]
  },
  {
@@ -21,7 +23,9 @@
    "32",
    "128",
    "--episodes",
-   "50"
+   "50",
+   "--out-dir",
+   "runs_v21/eval"
   ]
  },
  {
@@ -31,13 +35,15 @@
    "-m",
    "pomdp_pick.eval.evaluate_pomcp",
    "--wm",
-   "runs/world_model/wm.npz",
+   "runs_v21/world_model/wm.npz",
    "--sims",
    "32",
    "128",
    "512",
    "--episodes",
-   "50"
+   "50",
+   "--out-dir",
+   "runs_v21/eval"
   ]
  },
  {
@@ -49,7 +55,9 @@
    "--sims",
    "512",
    "--episodes",
-   "50"
+   "20",
+   "--out-dir",
+   "runs_v21/eval"
   ]
  }
 ]

@@ -217,3 +217,12 @@ def test_collect_records_episode_ids(tmp_path):
 
     f = np.load(collect(None, 7, tmp_path / "d.npz", policy=Commit(), eps=0.0, seed=7))
     assert f["E"].shape == (7,) and np.all(np.diff(f["E"]) >= 0) and f["E"][-1] >= 1   # 3 commits end an episode
+
+
+def test_evaluate_pomcp_cli_writes_into_out_dir(tmp_path, monkeypatch):
+    import sys
+    from pomdp_pick.eval import evaluate_pomcp as ep
+    monkeypatch.setattr(sys, "argv", ["x", "--sims", "2", "--episodes", "1", "--max-decisions", "2",
+                                      "--out-dir", str(tmp_path / "ev")])
+    ep.main()
+    assert (tmp_path / "ev" / "pomcp2_seed0_n1.csv").exists()
