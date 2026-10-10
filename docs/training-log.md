@@ -1919,3 +1919,7 @@ success/decisions: v21 oracle_s1: 0.3M 0.93/7  0.5M 0.63/9  0.75M 0.66/9  1.0M 0
 ## v2.1 plain_s1 finished (2026-10-10 02:42)
 
 success/decisions: v21 plain_s1: 0.3M 0.78/9  0.5M 0.39/14  0.75M 0.40/15  1.0M 0.38/19  wall 3.17h
+
+## v2.1 belief_s1 finished (2026-10-10 05:42)
+
+success/decisions: v21 belief_s1: 0.3M 0.81/11  0.5M 0.45/12  0.75M 0.52/19  1.0M 0.52/23  wall 2.99h (base-protocol seed 1 collapsed to 18%)
