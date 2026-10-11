@@ -2024,3 +2024,15 @@ Incidents:
 - *Archive step failed silently:* `git mv -k` left the buggy WM CSVs in place, and the fix queue would have skipped all three budgets. Caught at 08:50 and moved by hand before the re-run.
 
 Report §4.3 written. `success_vs_budget` now takes several reference lines (belief PPO plus the no-search rule).
+
+## Footage re-rendered from v2.1 models (2026-10-11 ~11:00)
+
+All renders ran one at a time under the watchdog; outputs are in `runs/footage/v21/`.
+
+- **Contrast:** `tools/footage.py --runs runs_v21 --methods belief plain --run-seed 2 --sigma 15 --n 16`.
+  - Belief succeeded on 9/16 episodes, plain on 7/16; belief-only successes on episodes 2, 4, 6, 7, 12.
+  - Selected the first such episode (ep2, a belief recovery on attempt 2): `contrast/belief_vs_plain_s2_sig15_ep2.mp4`.
+- **Showcase** (`runs/footage/v21_showcase_jobs.sh`), 1280×720:
+  - `hero.mp4`: ep4, a one-attempt success, 6.1 s.
+  - `recovery.mp4`: ep10, a miss then a successful grasp, 11.4 s.
+  - `pomcp.mp4`: 32 sims, σ 10 mm, ep0 succeeded on the first try, 7.0 s.
