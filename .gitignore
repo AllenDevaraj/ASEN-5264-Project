@@ -5,6 +5,7 @@ runs/
 *.egg-info/
 __pycache__/
 brag-output/work/
+brag-output-*/work/
 # model / data binaries (kept on disk and in tag v1-course-submission)
 *.zip
 *.pkl
