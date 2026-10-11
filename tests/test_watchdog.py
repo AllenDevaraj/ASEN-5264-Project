@@ -25,16 +25,18 @@ def test_child_runs_to_completion(tmp_path):
 
 def test_terminating_watchdog_terminates_paused_child(tmp_path):
     import os, signal, subprocess, sys, time
-    marker = tmp_path / "child.pid"
-    child = f"import os,time; open(r'{marker}','w').write(str(os.getpid())); time.sleep(60)"
+    # The child pauses itself before it can do anything, as the real watchdog may do on a hot or
+    # low-memory machine, so the child pid comes from /proc rather than from the child.
+    child = "import os,signal,time; os.kill(os.getpid(), signal.SIGSTOP); time.sleep(60)"
     w = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).parents[1] / "tools/watchdog.py"),
                           "--log", str(tmp_path / "w.log"), "--", sys.executable, "-c", child])
-    for _ in range(50):
-        if marker.exists() and marker.read_text():
+    children = pathlib.Path(f"/proc/{w.pid}/task/{w.pid}/children")
+    for _ in range(200):
+        if children.read_text().split():
             break
-        time.sleep(0.1)
-    cpid = int(marker.read_text())
-    os.kill(cpid, signal.SIGSTOP)          # simulate a paused job
+        time.sleep(0.05)
+    cpid = int(children.read_text().split()[0])
+    os.kill(cpid, signal.SIGSTOP)          # simulate a paused job (idempotent if already stopped)
     w.terminate()
     w.wait(timeout=20)
     time.sleep(0.5)

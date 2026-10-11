@@ -2053,3 +2053,11 @@ All renders ran one at a time under the watchdog; outputs are in `runs/footage/v
 **Test status:**
 - The last full run was killed at 78% by Claude Code's low-memory reaper; other apps held ~5 GB and swap was exhausted.
 - The unreached files pass, except `test_watchdog.py::test_terminating_watchdog_terminates_paused_child`, which is flaky under load (5 s child-start wait). The watchdog code is unchanged.
+
+## Flaky watchdog test fixed; full suite green (2026-10-11)
+
+`test_terminating_watchdog_terminates_paused_child` failed in the full suite with plenty of memory free (91/92).
+- *Cause:* the watchdog under test reads the real sensors. During the suite the CPU spikes past 95 °C (the hard-pause threshold), so it may SIGSTOP the child before the child writes its pid file. The test then waited on a file that never came. This is the same class as the earlier queue-stop test flake.
+- *RED:* a child that pauses itself before writing reproduces it deterministically (`FileNotFoundError` after 5 s).
+- *Fix:* the test reads the child pid from `/proc/<watchdog>/task/<pid>/children`, so the child never needs to run. The tested property is unchanged: terminating the watchdog kills its paused job. GREEN 5/5.
+- *Full suite:* **92/92 passed** (2 min 10 s, after closing Firefox).
