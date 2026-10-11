@@ -97,11 +97,26 @@ class Planner:
         return ret
 
 
+class MeanHeuristic:
+    """No-search ablation: the rollout policy applied to the particle-filter mean (yaw mod π)."""
+    label = "heuristic"
+
+    def plan(self, env):
+        t0, c0 = time.perf_counter(), time.process_time()
+        w = env.pf.weights / env.pf.weights.sum()
+        x, y = w @ env.pf.particles[:, 0], w @ env.pf.particles[:, 1]
+        th = float(np.angle(w @ np.exp(2j * env.pf.particles[:, 2]))) / 2
+        a = Planner.heuristic(env, (x, y), th)
+        return int(a), {"n_sims": 0, "wall_s": time.perf_counter() - t0,
+                        "cpu_s": time.process_time() - c0, "q": []}
+
+
 class WMPlanner:
     """UCT over the learned world model in the 13-D belief-summary space (no physics).
 
     Reward mirrors the env: -0.01 per step plus shaping on the belief-mean distance; a commit
-    is terminal and pays the expected grasp-and-place value 15·p - (1 - p)."""
+    is terminal for the search and pays p·(15 - Φ) - (1 - p). Only a successful grasp ends the
+    real episode, so only that branch collects the -Φ terminal potential; a miss does not."""
 
     def __init__(self, world_model, n_sims, depth=8, c=2.0, gamma=0.99, rng=None):
         self.wm, self.n_sims, self.depth, self.c, self.gamma = world_model, n_sims, depth, c, gamma
@@ -120,7 +135,7 @@ class WMPlanner:
     def _step(self, s, a):
         s2, p = self.wm.step_state(s, sb.MACROS[a])
         if a == sb.COMMIT:
-            return s2, 15.0 * p - (1.0 - p) - 0.01 - self._phi(s), True
+            return s2, p * (15.0 - self._phi(s)) - (1.0 - p) - 0.01, True
         return s2, -0.01 + self.gamma * self._phi(s2) - self._phi(s), False
 
     def plan(self, env):

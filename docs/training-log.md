@@ -1976,3 +1976,29 @@ oracle 0.64/0.68/0.67 · belief 0.47/0.52/0.53 · plain 0.45/0.38/0.43 · frames
 - R²: gripper 0.97–0.98; μ_rel 0.79/0.67; belief yaw ≈0.05/0.08; σx/σy 0.58/0.43; σθ 0.24; σ_ep 0.16.
 - Grasp AUC 0.854.
 - Low R² on belief dims = irreducible observation randomness for a deterministic model (report §4.4).
+
+## POMCP study, first results + WM-POMCP commit-value bug (2026-10-11 06:30–07:30)
+
+Physics POMCP at σ = 10 mm, 50 shared episodes, v2.1 setup:
+
+| budget | success | CPU per decision | mean commit error | attempts |
+|---|---|---|---|---|
+| 32 sims | 34/50 = 0.68 [0.54–0.79] | 1.0 s | 11.6 mm | 1.32 |
+| 128 sims | 33/50 = 0.66 [0.52–0.78] | 4.3 s | 10.7 mm | 1.20 |
+
+Belief PPO on the same 50 episodes: 0.41 (seeds 0.36/0.34/0.54).
+
+**Bug: WM-POMCP's commit value.**
+
+- *Symptom:* 0.30 / 0.16 / 0.18 success at 32 / 128 / 512 sims, so success *fell* with budget. Commit errors were bimodal: about a quarter of episodes committed 3 times from the start pose, 100–175 mm from the brick.
+- *Cause:* `WMPlanner._step` gave every commit the terminal potential −Φ(s), even when it missed. In the real env a miss does not end the episode, so no potential is cashed out.
+  - From 15 cm away, a hopeless commit was worth +1.99, more than any move toward the brick.
+  - More search found this exploit more reliably.
+- *Fix:* the commit value is now p·(15 − Φ) − (1 − p), so only a successful grasp collects −Φ.
+  - Test: `test_wm_commit_only_cashes_out_the_potential_when_the_grasp_succeeds` (RED → GREEN).
+  - Replaying episodes 7/10/20: the 150 mm blind commits are gone; errors are now 11–30 mm.
+- *Data:* the buggy CSVs are archived to `runs/archive/wm_cashout_bug/`.
+
+**Added: no-search ablation** (`MeanHeuristic`, `--heuristic`). It is POMCP's rollout policy acting on the particle-filter mean, and separates the value of search from the value of the hand-written rollout rule.
+
+**Queue:** `configs/queue_pomcp_fix.json` (WM-POMCP re-run + heuristic ablation, out `runs/queue_pomcp_fix.out`) is chained after the 512-sim run. Suite 90/90.

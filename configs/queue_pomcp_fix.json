@@ -1,0 +1,6 @@
+[
+ {"name": "wmpomcp_fixed", "cmd": ["./vpy", "-m", "pomdp_pick.eval.evaluate_pomcp", "--wm", "runs_v21/world_model/wm.npz",
+   "--sims", "32", "128", "512", "--episodes", "50", "--out-dir", "runs_v21/eval"]},
+ {"name": "heuristic_ablation", "cmd": ["./vpy", "-m", "pomdp_pick.eval.evaluate_pomcp", "--heuristic",
+   "--episodes", "50", "--out-dir", "runs_v21/eval"]}
+]

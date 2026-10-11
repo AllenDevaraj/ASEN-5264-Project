@@ -226,3 +226,49 @@ def test_evaluate_pomcp_cli_writes_into_out_dir(tmp_path, monkeypatch):
                                       "--out-dir", str(tmp_path / "ev")])
     ep.main()
     assert (tmp_path / "ev" / "pomcp2_seed0_n1.csv").exists()
+
+
+class _ConstP:
+    """Stub world model: the state never changes and every commit grasps with probability p."""
+    def __init__(self, p):
+        self.p = p
+
+    def step_state(self, s, action):
+        return np.asarray(s, np.float32).copy(), self.p
+
+
+def test_wm_commit_only_cashes_out_the_potential_when_the_grasp_succeeds():
+    # A missed grasp does not end the real episode, so it must not collect the -Φ terminal bonus;
+    # otherwise a hopeless commit far from the brick outscores moving toward it.
+    from pomdp_pick.planning.pomcp import WMPlanner
+    far = np.zeros(13, np.float32); far[5] = 1.5          # belief mean 15 cm away (obs units: dm)
+    _, r_miss, term = WMPlanner(_ConstP(0.0), 1)._step(far, sb.COMMIT)
+    assert term and r_miss == -1.0 - 0.01
+    _, r_hit, _ = WMPlanner(_ConstP(1.0), 1)._step(far, sb.COMMIT)
+    assert r_hit == 15.0 - 0.01 - WMPlanner._phi(far)
+
+
+def test_mean_heuristic_acts_on_the_belief_mean_without_touching_the_env():
+    # No-search ablation: POMCP's rollout policy applied to the particle-filter mean.
+    from pomdp_pick.planning.pomcp import MeanHeuristic, _heuristic
+    env = PickPlaceEnv("belief"); env.reset(seed=4)
+    snap = sb.snapshot(env)
+    w = env.pf.weights / env.pf.weights.sum()
+    mx, my = w @ env.pf.particles[:, 0], w @ env.pf.particles[:, 1]
+    th = np.angle(w @ np.exp(2j * env.pf.particles[:, 2])) / 2
+    p = env.arm.p
+    a, stats = MeanHeuristic().plan(env)
+    assert a == _heuristic(mx - p[0], my - p[1], p[2], th - env.arm.yaw)
+    assert stats["n_sims"] == 0 and MeanHeuristic().label == "heuristic"
+    assert np.array_equal(snap["d"].qpos, env.d.qpos)
+
+
+def test_evaluate_pomcp_cli_heuristic_ablation_writes_its_own_csv(tmp_path, monkeypatch):
+    import sys
+    import pandas as pd
+    from pomdp_pick.eval import evaluate_pomcp as ep
+    monkeypatch.setattr(sys, "argv", ["x", "--heuristic", "--episodes", "1", "--max-decisions", "3",
+                                      "--out-dir", str(tmp_path / "ev")])
+    ep.main()
+    df = pd.read_csv(tmp_path / "ev" / "heuristic_seed0_n1.csv")
+    assert df.method.tolist() == ["heuristic"] and df.n_sims.tolist() == [0]

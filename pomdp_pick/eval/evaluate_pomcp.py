@@ -69,7 +69,16 @@ def main():
     ap.add_argument("--wm", default=None, help="world-model .npz: plan with WMPlanner instead of physics")
     ap.add_argument("--out-dir", default="runs/eval")
     ap.add_argument("--max-decisions", type=int, default=400)
+    ap.add_argument("--heuristic", action="store_true", help="no-search ablation: rollout policy on the belief mean")
     a = ap.parse_args()
+    if a.heuristic:
+        from pomdp_pick.planning.pomcp import MeanHeuristic
+        out = Path(a.out_dir) / f"heuristic_seed0_n{a.episodes}.csv"
+        if not out.exists():
+            evaluate_pomcp(0, a.sigma, a.episodes, out, max_decisions=a.max_decisions,
+                           make_planner=lambda rng: MeanHeuristic())
+            print("wrote", out, flush=True)
+        return
     for n in a.sims:
         if a.wm:
             from pomdp_pick.planning.pomcp import WMPlanner
