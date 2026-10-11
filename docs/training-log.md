@@ -2036,3 +2036,20 @@ All renders ran one at a time under the watchdog; outputs are in `runs/footage/v
   - `hero.mp4`: ep4, a one-attempt success, 6.1 s.
   - `recovery.mp4`: ep10, a miss then a successful grasp, 11.4 s.
   - `pomcp.mp4`: 32 sims, σ 10 mm, ep0 succeeded on the first try, 7.0 s.
+
+## Final review of the v2.1 work + brag video (2026-10-11)
+
+**Final review** (opus code-reviewer, range `699d06d..75ee675`): 0 Critical, 1 Important, 9 Minor.
+- *Verified:* the assist never reaches evaluation, commit error is logged before the nudge, and every number in report §4 and the README matches `runs_v21/eval`.
+- *Fixed:*
+  - the footage cache key now includes the runs root;
+  - claims tightened: "higher at every noise level" (point estimate), with CIs separating at 15–20 mm; the n = 20 caveat on the 512-sim point; explanations marked untested.
+- *Six Minors* deferred (ledger).
+
+**Brag video:** `brag-output-2026-10-11-101751/` (`brag.mp4`, 23 s; `brag.jpg`; `share-copy.txt`; `brag-plan.md`).
+- Built from logged v2.1 physics; every number is computed from `runs_v21/eval` by `work/build_data.py`.
+- The chart headline was changed to "across the noise range" after review.
+
+**Test status:**
+- The last full run was killed at 78% by Claude Code's low-memory reaper; other apps held ~5 GB and swap was exhausted.
+- The unreached files pass, except `test_watchdog.py::test_terminating_watchdog_terminates_paused_child`, which is flaky under load (5 s child-start wait). The watchdog code is unchanged.
