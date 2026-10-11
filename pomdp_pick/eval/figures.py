@@ -84,8 +84,9 @@ def success_vs_budget(df, path, reference=None):
         a1.errorbar(g.n_sims, g.rate * 100, yerr=[(g.rate - g.lo) * 100, (g.hi - g.rate) * 100],
                     fmt="-o", color=c, label=sim, lw=2, ms=4, capsize=3)
         a2.plot(g.n_sims, g.decision_s, "-o", color=c, label=sim, lw=2, ms=4)
-    if reference is not None:
-        a1.axhline(reference[1] * 100, ls="--", color=COLORS["belief"], lw=1.5, label=reference[0])
+    refs = [reference] if isinstance(reference, tuple) else (reference or [])
+    for (label, value), c, ls in zip(refs, (COLORS["belief"], "#666666", "#999999"), ("--", ":", "-.")):
+        a1.axhline(value * 100, ls=ls, color=c, lw=1.5, label=label)
     for a in (a1, a2):
         a.set_xscale("log", base=2)
         a.set_xlabel("Simulations per decision")
@@ -97,6 +98,7 @@ def success_vs_budget(df, path, reference=None):
     a2.set_yscale("log")
     fig.tight_layout()
     fig.savefig(path)
+    return fig
 
 
 if __name__ == "__main__":

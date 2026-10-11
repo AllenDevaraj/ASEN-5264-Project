@@ -272,3 +272,14 @@ def test_evaluate_pomcp_cli_heuristic_ablation_writes_its_own_csv(tmp_path, monk
     ep.main()
     df = pd.read_csv(tmp_path / "ev" / "heuristic_seed0_n1.csv")
     assert df.method.tolist() == ["heuristic"] and df.n_sims.tolist() == [0]
+
+
+def test_success_vs_budget_draws_every_reference_line(tmp_path):
+    import pandas as pd
+    from pomdp_pick.eval.figures import success_vs_budget
+    df = pd.DataFrame([dict(method=f"pomcp{n}", n_sims=n, success=bool(i % 2), mean_decision_s=0.01 * n)
+                       for n in (32, 128) for i in range(4)])
+    fig = success_vs_budget(df, tmp_path / "b.png",
+                            reference=[("belief PPO", 0.41), ("no search (rollout rule)", 0.50)])
+    labels = [t.get_text() for t in fig.axes[0].get_legend().get_texts()]
+    assert "belief PPO" in labels and "no search (rollout rule)" in labels

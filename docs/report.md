@@ -83,7 +83,7 @@ Estimating σ_ep jointly is what keeps the filter calibrated at 30 mm. v1's fixe
 | evaluation | 200 episodes × 6 σ levels per run; episode i uses reset seed 10 000 + i for every method |
 | per-cell CI | Wilson 95% |
 | aggregate | IQM across seeds × σ levels with stratified bootstrap 95% CIs, and P(belief > X) (rliable, Agarwal et al., 2021) |
-| POMCP | σ = 10 mm, 50 episodes (seeds 10 000–10 049) per budget ∈ {32, 128, 512} simulations; CPU time per decision |
+| POMCP | σ = 10 mm, 50 episodes (seeds 10 000–10 049) per budget ∈ {32, 128} simulations, 20 at 512; WM-POMCP 50 each at {32, 128, 512}; no-search ablation 50; CPU time per decision; paired McNemar tests on shared episodes |
 | compute | one 4-core laptop CPU, no GPU; every job under a thermal/memory/battery watchdog (`tools/watchdog.py`) |
 
 ## 4. Results
@@ -147,7 +147,42 @@ The curriculum makes early commits pay off, which removes the commit-avoidance t
 
 ### 4.3 Planning: budget vs success vs CPU time
 
-*Pending:* the queue in `configs/queue_pomcp.json` produces it, followed by `figures.success_vs_budget`. The belief-PPO reference line uses the same 50 episodes at 10 mm.
+**Setup:**
+- σ = 10 mm, shared episodes 10 000–10 049; 512 simulations ran on the first 20 because of compute.
+- Every planner uses the same particle filter.
+- "No search" is POMCP's rollout rule acting alone on the filter's mean: align yaw, centre, descend, commit.
+
+| planner | simulations per decision | success | 95% CI | CPU per decision | mean grasp attempts |
+|---|---|---|---|---|---|
+| no search (rollout rule on belief mean) | 0 | 0.50 | 0.37–0.63 | < 1 ms | 1.26 |
+| **physics POMCP** | 32 | **0.68** | 0.54–0.79 | 1.0 s | 1.32 |
+| physics POMCP | 128 | 0.66 | 0.52–0.78 | 4.3 s | 1.20 |
+| physics POMCP | 512 (n = 20) | 0.50 | 0.30–0.70 | 17.9 s | 1.30 |
+| WM-POMCP | 32 | 0.40 | 0.28–0.54 | 8 ms | 1.96 |
+| WM-POMCP | 128 | 0.30 | 0.19–0.44 | 33 ms | 2.00 |
+| WM-POMCP | 512 | 0.24 | 0.14–0.37 | 115 ms | 2.18 |
+| *belief PPO, same 50 episodes (3 seeds)* | — | *0.41* | | < 1 ms | |
+| *oracle PPO, same 50 episodes (3 seeds)* | — | *0.73* | | < 1 ms | |
+
+![budget](figs/v21/success_vs_budget.png)
+
+**Paired against the no-search rule on the same episodes** (exact McNemar test):
+
+| planner | episodes it wins | episodes it loses | p |
+|---|---|---|---|
+| physics POMCP 32 | 15 | 6 | 0.08 |
+| WM-POMCP 512 | 6 | 19 | 0.015 |
+
+- **Physics POMCP is the strongest non-oracle method.** At 1 s of CPU per decision it reaches 0.68, against 0.41 for belief PPO on the same episodes, and closes most of the gap to the oracle (0.73).
+- **Most of that comes from the belief plus a sensible rule, not from search.** The rollout rule alone on the filter mean already scores 0.50, above belief PPO.
+  - Belief PPO localizes better than plain PPO (§4.2), but it has not learned a policy as good as "go to the mean, descend, commit".
+  - Search adds +0.18 over the rule. That is suggestive (15 vs 6 paired episodes), not significant at n = 50.
+- **More physics search did not help.** On episodes 0–19 the three budgets score 0.70, 0.75 and 0.50.
+  - A plausible cause, not tested here: the tree is open-loop (root sampling, no observation branching). With more simulations it converges on a single action sequence that is best *on average over particles*. It does not value the information the next readings will bring. A small budget leaves the decision close to the re-planned rollout rule.
+- **WM-POMCP gets worse the harder it searches (0.40 → 0.24).** It is significantly below the no-search rule at 512 simulations.
+  - Its learned model predicts the gripper almost perfectly but predicts only the *average* belief update (§4.4). More search finds more futures where that averaged model is over-optimistic, a textbook case of model exploitation.
+  - It is 100–150× cheaper per decision than physics search, but its errors compound in exactly the dimensions that decide a grasp.
+- **A bug found by this study:** the first WM-POMCP run (0.30 / 0.16 / 0.18) credited a *missed* grasp with the terminal shaping potential. That made blind commits from 15 cm look better than approaching the brick. The fix and its test are logged in `training-log.md`, and the invalid CSVs are archived in `runs/archive/wm_cashout_bug/`.
 
 ### 4.4 World-model accuracy
 
@@ -172,10 +207,10 @@ The curriculum makes early commits pay off, which removes the commit-avoidance t
 - **Sim only:** no hardware validation, and the camera is an analytic noise model, not rendered images.
 - **Scripted motion:** the grasp and place are scripted primitives. The policy learns *where and when* to grasp, not finger control.
 - **Privileged planner simulator:** POMCP's simulator knows the distractor poses and the noise model.
+- **Planning sample sizes are small:** one planner seed, 50 episodes (20 at 512 simulations), so budget-to-budget differences of ±0.15 are within noise.
 - **WM-POMCP approximations:**
-  - a commit is terminal and pays 15·P(grasp) − (1 − P(grasp)), assuming the place always succeeds;
+  - a commit is terminal for the search and pays P(grasp)·(15 − Φ) − (1 − P(grasp)), assuming the place always succeeds and ignoring the attempts left after a miss;
   - the grasp's time cost is ignored;
-  - after a miss, the remaining attempts are ignored.
 - **Small training budget:** 1M steps per run, 3 seeds, chosen to fit a laptop. Training success at 1M steps (`docs/figs/v21/learning_curves.png`) had flattened after the assist reached zero, but longer training could change the margins.
 - **The curriculum uses privileged information during training:** the assist reads the true brick pose. It is gone by mid-training, and evaluation never uses it. It changes what each method learns, though, and it cost the oracle about 0.1 success (§4.2).
 - **Recurrent PPO was not retrained under v2.1.** Its base-protocol result (collapse on 3 of 3 seeds) says nothing about LSTM memory with a fixed training process.

@@ -2002,3 +2002,25 @@ Belief PPO on the same 50 episodes: 0.41 (seeds 0.36/0.34/0.54).
 **Added: no-search ablation** (`MeanHeuristic`, `--heuristic`). It is POMCP's rollout policy acting on the particle-filter mean, and separates the value of search from the value of the hand-written rollout rule.
 
 **Queue:** `configs/queue_pomcp_fix.json` (WM-POMCP re-run + heuristic ablation, out `runs/queue_pomcp_fix.out`) is chained after the 512-sim run. Suite 90/90.
+
+## POMCP study complete (2026-10-11 10:10)
+
+All at σ = 10 mm on shared episodes:
+
+| planner | success | CPU per decision |
+|---|---|---|
+| no-search rule on belief mean (`heuristic`) | 25/50 = 0.50 | 0 |
+| physics POMCP 32 | 0.68 | 1.0 s |
+| physics POMCP 128 | 0.66 | 4.3 s |
+| physics POMCP 512 (20 episodes) | 0.50 | 17.9 s |
+| WM-POMCP 32 (fixed) | 0.40 | 8 ms |
+| WM-POMCP 128 (fixed) | 0.30 | 33 ms |
+| WM-POMCP 512 (fixed) | 0.24 | 115 ms |
+
+On the same episodes, belief PPO scores 0.41 and oracle PPO 0.73. Paired vs the heuristic: POMCP-32 wins 15 / loses 6 (p = 0.08); WM-POMCP-512 wins 6 / loses 19 (p = 0.015).
+
+Incidents:
+- *POMCP-512 terminated twice by the watchdog* (memory critical, 480 MB). Cause: my full test suite running alongside it. It resumed from `.partial`. Rule added: no ad-hoc heavy work while a queue job runs.
+- *Archive step failed silently:* `git mv -k` left the buggy WM CSVs in place, and the fix queue would have skipped all three budgets. Caught at 08:50 and moved by hand before the re-run.
+
+Report §4.3 written. `success_vs_budget` now takes several reference lines (belief PPO plus the no-search rule).

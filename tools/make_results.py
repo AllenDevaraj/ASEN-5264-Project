@@ -41,10 +41,14 @@ def main():
     pc = sorted(glob.glob(str(runs / "eval/*pomcp*_seed0_n*.csv")))
     if pc:
         dp = pd.concat([pd.read_csv(p) for p in pc])
-        ref = None
+        ref = []
         if rl:
             b = df[(df.method == "belief") & (df.sigma_mm == 10) & (df.episode < dp.episode.nunique())]
-            ref = ("belief PPO (same episodes)", float(b.success.mean())) if len(b) else None
+            ref += [("belief PPO (same episodes)", float(b.success.mean()))] if len(b) else []
+        heur = sorted(glob.glob(str(runs / "eval/heuristic_seed0_n*.csv")))
+        if heur:
+            h = pd.read_csv(heur[0])
+            ref += [(f"no search: rollout rule on belief mean (n={len(h)})", float(h.success.mean()))]
         figures.success_vs_budget(dp, FIGS / "success_vs_budget.png", reference=ref)
         parts += ["## POMCP: budget vs success vs CPU time (σ = 10 mm)\n",
                   f"![budget](figs/{a.tag}/success_vs_budget.png)\n",
