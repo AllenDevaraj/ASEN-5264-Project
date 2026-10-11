@@ -35,7 +35,7 @@ def main():
         mode, act = R.policy_actor(f"{a.runs}/{m}/seed{a.run_seed}")
         env = PickPlaceEnv(mode, sigma_fixed=a.sigma / 1000)
         for i in range(a.n):
-            p = out / f"{R.episode_name(m, a.run_seed, a.sigma, i)}.npz"
+            p = out / f"{R.episode_name(m, a.run_seed, a.sigma, i, runs=a.runs)}.npz"
             if not p.exists():
                 R.save(R.record_episode(env, act, SEED_BASE + i), p)
             import numpy as np
@@ -47,8 +47,8 @@ def main():
         print("no contrast seed found", flush=True)
         return
     from pomdp_pick.footage.render import render_episode, side_by_side
-    clips = [render_episode(out / f"{R.episode_name(m, a.run_seed, a.sigma, pick)}.npz",
-                            out / f"{R.episode_name(m, a.run_seed, a.sigma, pick)}.mp4", TITLES[m], w=960, h=540)
+    clips = [render_episode(out / f"{R.episode_name(m, a.run_seed, a.sigma, pick, runs=a.runs)}.npz",
+                            out / f"{R.episode_name(m, a.run_seed, a.sigma, pick, runs=a.runs)}.mp4", TITLES[m], w=960, h=540)
              for m in a.methods]
     final = out / f"{a_m}_vs_{b_m}_s{a.run_seed}_sig{a.sigma:g}_ep{pick}.mp4"
     side_by_side(*clips, final)

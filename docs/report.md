@@ -125,8 +125,14 @@ The curriculum makes early commits pay off, which removes the commit-avoidance t
 
 ![success vs sigma](figs/v21/success_vs_sigma.png)
 
-- **Belief PPO beats plain and frame-stack PPO at every noise level**, and the IQM confidence intervals do not overlap. The seed spread is the strongest evidence: belief's worst seed (0.39 mean success) is above plain's best (0.37).
-- **The gap grows with noise:** +0.05 at 2 mm and +0.12 at 15 mm (0.42 vs 0.30, disjoint CIs). It shrinks again at 30 mm, which is outside the training range and where every method approaches the floor.
+- **Belief PPO beats plain and frame-stack PPO overall.**
+  - The IQM confidence intervals, bootstrapped across seeds, do not overlap.
+  - Belief's worst seed (0.39 mean success) is above plain's best (0.37).
+  - Its point estimate is higher at every noise level.
+- **The gap grows with noise:** +0.05 at 2 mm and +0.12 at 15 mm (0.42 vs 0.30). It shrinks again at 30 mm, which is outside the training range and where every method approaches the floor.
+- **How far the per-σ intervals reach:** they pool 3 seeds × 200 episodes, so they hold *for these trained policies*. They do not cover seed-to-seed variation; the IQM intervals do.
+  - Belief and plain intervals separate at 15 and 20 mm, and overlap at 2, 5 and 30 mm.
+  - At 10 mm, plain's seed 0 (0.43) edges belief's seed 0 (0.42).
 - **Mechanism: commit error.** Belief PPO commits closer to the brick at every σ (mean error, mm):
 
   | σ (mm) | 2 | 5 | 10 | 15 | 20 | 30 |
@@ -180,7 +186,7 @@ The curriculum makes early commits pay off, which removes the commit-avoidance t
 - **More physics search did not help.** On episodes 0–19 the three budgets score 0.70, 0.75 and 0.50.
   - A plausible cause, not tested here: the tree is open-loop (root sampling, no observation branching). With more simulations it converges on a single action sequence that is best *on average over particles*. It does not value the information the next readings will bring. A small budget leaves the decision close to the re-planned rollout rule.
 - **WM-POMCP gets worse the harder it searches (0.40 → 0.24).** It is significantly below the no-search rule at 512 simulations.
-  - Its learned model predicts the gripper almost perfectly but predicts only the *average* belief update (§4.4). More search finds more futures where that averaged model is over-optimistic, a textbook case of model exploitation.
+  - Its learned model predicts the gripper almost perfectly but predicts only the *average* belief update (§4.4). A likely explanation, not tested here, is model exploitation: more search finds more futures where that averaged model is over-optimistic.
   - It is 100–150× cheaper per decision than physics search, but its errors compound in exactly the dimensions that decide a grasp.
 - **A bug found by this study:** the first WM-POMCP run (0.30 / 0.16 / 0.18) credited a *missed* grasp with the terminal shaping potential. That made blind commits from 15 cm look better than approaching the brick. The fix and its test are logged in `training-log.md`, and the invalid CSVs are archived in `runs/archive/wm_cashout_bug/`.
 

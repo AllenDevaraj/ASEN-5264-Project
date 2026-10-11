@@ -64,3 +64,10 @@ def test_belief_hidden_only_while_lifted_or_after_the_final_successful_lift():
     lifted = np.array([0, 1, 1, 0, 0, 0, 1, 1, 0, 0], bool)    # a slipped lift, then the real one
     assert belief_hidden(lifted, True).astype(int).tolist() == [0, 1, 1, 0, 0, 0, 1, 1, 1, 1]
     assert belief_hidden(lifted, False).astype(int).tolist() == [0, 1, 1, 0, 0, 0, 1, 1, 0, 0]
+
+
+def test_episode_cache_name_distinguishes_runs_roots():
+    # The same method/seed/σ/episode from runs/ (base protocol) and runs_v21/ are different policies.
+    from pomdp_pick.footage.record import episode_name
+    assert episode_name("belief", 0, 10, 3, runs="runs") != episode_name("belief", 0, 10, 3, runs="runs_v21")
+    assert episode_name("belief", 0, 10, 3, runs="some/dir/runs_v21") == episode_name("belief", 0, 10, 3, runs="runs_v21")

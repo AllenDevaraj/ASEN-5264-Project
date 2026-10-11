@@ -55,8 +55,9 @@ def record_episode(env, act, seed, max_decisions=400):
     return out
 
 
-def episode_name(method, run_seed, sigma_mm, i):
-    return f"{method}_s{run_seed}_sig{sigma_mm:g}_ep{i}"
+def episode_name(method, run_seed, sigma_mm, i, runs="runs"):
+    """Cache key for a recorded episode; includes the runs root so protocols never share a cache."""
+    return f"{Path(runs).name}_{method}_s{run_seed}_sig{sigma_mm:g}_ep{i}"
 
 
 def policy_actor(run_dir):

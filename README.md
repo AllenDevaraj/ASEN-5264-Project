@@ -23,7 +23,7 @@ These are the v2.1 numbers: 3 training seeds per method, 200 shared evaluation e
 | Frame-stack PPO (last 4 readings) | 0.33 | 0.32–0.35 | 13.6 mm |
 
 **Belief beats memory:**
-- Belief PPO beats plain and frame-stack PPO at every noise level. Its worst seed beats plain's best.
+- Belief PPO beats plain and frame-stack PPO overall, with disjoint IQM intervals bootstrapped across seeds. Its worst seed beats plain's best, and its success is higher at every noise level.
 - The gap is largest at 15 mm: 0.42 vs 0.30.
 - It comes from commit precision: with about ±6 mm of physical grasp tolerance, 2–5 mm less error decides the grasp.
 - A raw window of readings (frame-stack) is *worse* than a single reading above 5 mm.
@@ -34,7 +34,7 @@ These are the v2.1 numbers: 3 training seeds per method, 200 shared evaluation e
 - With it, no run collapsed, at a cost of about 0.1 oracle success.
 - Both protocols are reported (report §4.1–4.2).
 
-**Planning (σ = 10 mm, 50 shared episodes):**
+**Planning (σ = 10 mm, 50 shared episodes; 20 at 512 simulations):**
 
 ![budget](docs/figs/v21/success_vs_budget.png)
 
@@ -46,8 +46,8 @@ These are the v2.1 numbers: 3 training seeds per method, 200 shared evaluation e
 | Belief PPO, same episodes | 0.41 | < 1 ms |
 
 - **Search in exact physics** gets within 0.05 of the oracle.
-- **A learned world model gets worse the harder you search it** (0.40 → 0.24 at 512 simulations). It predicts the gripper with R² 0.98, but only the *average* belief update (R² 0.05–0.6), and search exploits that error.
-- **More physics search did not help either** (0.68 → 0.66 → 0.50). The open-loop tree does not value the readings it will get.
+- **A learned world model gets worse the harder you search it** (0.40 → 0.24 at 512 simulations). It predicts the gripper with R² 0.98, but only the *average* belief update (R² 0.05–0.6). Search exploiting that error is the likely, untested, explanation.
+- **More physics search did not help** (0.68 → 0.66 → 0.50; the 512 point is from 20 episodes). On the same 20 episodes the scores are 0.70 / 0.75 / 0.50, so the differences are within noise. The open-loop tree may not value the readings it will get; that explanation is untested.
 
 ## What changed from v1
 
